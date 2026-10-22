@@ -2,6 +2,7 @@ import {
   AI_LEVELS,
   CHARGE_TIME,
   DRIBBLE_SPEED_FACTOR,
+  DT,
   DRIBBLE_STIFFNESS,
   GAIN_CONTROL_RADIUS,
   HUMAN_BODY_STEAL,
@@ -24,6 +25,7 @@ import {
   PLAYER_SPRINT_SPEED,
   SLIDE_RANGE,
 } from './constants';
+import { stepBall } from './ball';
 import { emit } from './events';
 import { isSprinting, kickBall, resolveHumanKick } from './kick';
 import { random, randomRange } from './rng';
@@ -188,11 +190,13 @@ export function resolvePossession(s: MatchState): void {
     carrier = undefined;
 
   if (!carrier && !s.setPiece && s.phase === 'play') {
-    let best = GAIN_CONTROL_RADIUS;
+    let best = Infinity;
     for (const p of active(s)) {
       if (!canControl(p) || ball.z >= MAX_CONTROL_HEIGHT) continue;
+      // The intended receiver is set for it and stretches a little further.
+      const reach = p.id === s.passTarget ? 1.1 : GAIN_CONTROL_RADIUS;
       const d = dist(p, ball);
-      if (d < best && trappable(s, p)) {
+      if (d < reach && d < best && trappable(s, p)) {
         best = d;
         carrier = p;
       }
@@ -272,7 +276,7 @@ function trappable(s: MatchState, p: Footballer): boolean {
   const ball = s.ball;
   const speed = Math.hypot(ball.vx, ball.vy);
   const rel = Math.hypot(ball.vx - p.vx, ball.vy - p.vy);
-  const max = p.id === s.passTarget ? MAX_CONTROL_REL_SPEED * 1.8 : MAX_CONTROL_REL_SPEED;
+  const max = p.id === s.passTarget ? MAX_CONTROL_REL_SPEED * 2 : MAX_CONTROL_REL_SPEED;
   return speed < max && rel < max * 1.6;
 }
 
@@ -337,12 +341,13 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     const ty = aimY - p.y;
     const n = Math.hypot(tx, ty) || 1;
     locomote(p, tx / n, ty / n, input.sprint, false, dt);
-  } else if (s.passTarget === p.id && !carrier && Math.hypot(input.moveX, input.moveY) < 0.2 && canMove(p)) {
-    // Receiving a pass with the stick untouched: run onto the ball.
-    const tx = s.ball.x + s.ball.vx * 0.3 - p.x;
-    const ty = s.ball.y + s.ball.vy * 0.3 - p.y;
+  } else if (s.passTarget === p.id && !carrier && canMove(p) && receiverOnAuto(s, input)) {
+    // Receiving a pass: cut across to meet the ball until the player steers somewhere new.
+    const meet = meetingPoint(s, p);
+    const tx = meet.x - p.x;
+    const ty = meet.y - p.y;
     const n = Math.hypot(tx, ty) || 1;
-    if (n > 0.3) locomote(p, tx / n, ty / n, input.sprint, false, dt);
+    if (n > 0.3) locomote(p, tx / n, ty / n, true, false, dt);
   } else if (atDeadBall) {
     // Lined up just behind the ball, always within kicking reach: the stick aims and he steps round it.
     const m = Math.hypot(input.moveX, input.moveY);
@@ -379,8 +384,12 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
         errorMul: k.errorMul,
         target: k.target,
       });
-      // Control follows the pass, FIFA style.
-      if (k.target >= 0) s.controlled = k.target;
+      // Control follows the pass, FIFA style; the stick used to aim it doesn't steer the receiver.
+      if (k.target >= 0) {
+        s.controlled = k.target;
+        const m = Math.hypot(input.moveX, input.moveY);
+        s.passStick = m > 0.3 ? { x: input.moveX / m, y: input.moveY / m } : null;
+      }
       return;
     }
     p.pending.ttl -= dt;
@@ -423,6 +432,32 @@ function chargeKicks(
     p.charging = null;
     p.charge = 0;
   }
+}
+
+/** Earliest point on the ball's path the player can get to (where he should meet a pass). */
+function meetingPoint(s: MatchState, p: Footballer): { x: number; y: number } {
+  const b = { ...s.ball };
+  for (let i = 1; i <= 150; i++) {
+    stepBall(b, DT);
+    if (dist(p, b) <= PLAYER_SPRINT_SPEED * i * DT * 0.85 + 0.5) return { x: b.x, y: b.y };
+  }
+  return { x: b.x, y: b.y };
+}
+
+/**
+ * The receiver runs onto the ball by himself while the stick is untouched or
+ * still held the way the pass was aimed; any other direction hands control back.
+ */
+function receiverOnAuto(s: MatchState, input: InputFrame): boolean {
+  const m = Math.hypot(input.moveX, input.moveY);
+  if (m < 0.2) {
+    s.passStick = null;
+    return true;
+  }
+  const ps = s.passStick;
+  if (ps && (input.moveX * ps.x + input.moveY * ps.y) / m > 0.7) return true;
+  s.passStick = null;
+  return false;
 }
 
 export function canKickNow(s: MatchState, p: Footballer): boolean {

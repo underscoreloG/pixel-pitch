@@ -318,6 +318,53 @@ describe('defending and assisted kicks', () => {
     expect(s.possessor).toBe(mate.id);
   });
 
+  it('a full-charge pass is firm and the receiver takes it first time, even with the aim still held', () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      const s = createMatch(seed, MATCH);
+      const me = human(s);
+      const mate = s.players.find((p) => p.team === 'home' && p.number === 4)!;
+      only(s, me, mate);
+      Object.assign(me, { x: 56, y: 34, facingX: -1, facingY: 0 });
+      Object.assign(mate, { x: 35, y: 30 });
+      Object.assign(s.ball, ball({ x: 55.5, y: 34 }));
+      run(s, 0.2, { ...NO_INPUT, moveX: -1 });
+      const n = Math.hypot(mate.x - me.x, mate.y - me.y);
+      const stick = { moveX: (mate.x - me.x) / n, moveY: (mate.y - me.y) / n };
+      press(s, 'pass', 1, stick);
+      expect(Math.hypot(s.ball.vx, s.ball.vy)).toBeGreaterThan(15);
+      let t = 0;
+      while (s.possessor !== mate.id && t < 3) {
+        stepMatch(s, { ...NO_INPUT, ...stick });
+        t += DT;
+      }
+      expect(t).toBeLessThan(0.8);
+    }
+  });
+
+  it('a max-power shot is fast and stays on target', () => {
+    let onTarget = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const s = createMatch(seed, MATCH);
+      const me = human(s);
+      only(s, me);
+      Object.assign(me, { x: 87, y: 30, facingX: 1, facingY: 0 });
+      Object.assign(s.ball, ball({ x: 87.6, y: 30 }));
+      s.possessor = me.id;
+      const n = Math.hypot(105 - 87.6, 37.2 - 30);
+      press(s, 'shoot', 1, { moveX: (105 - 87.6) / n, moveY: (37.2 - 30) / n });
+      expect(Math.hypot(s.ball.vx, s.ball.vy)).toBeGreaterThan(28);
+      for (let i = 0; i < 2 / DT; i++) {
+        const prevX = s.ball.x;
+        stepMatch(s, NO_INPUT);
+        if (s.phase === 'goal' || (prevX < 105 && s.ball.x >= 105)) {
+          if (s.phase === 'goal') onTarget++;
+          break;
+        }
+      }
+    }
+    expect(onTarget).toBeGreaterThanOrEqual(9);
+  });
+
   it('an assisted shot aimed just wide is pulled inside the post; manual stays wide', () => {
     const shootFrom = (assist: boolean) => {
       const s = createMatch(3, { ...MATCH, assist });

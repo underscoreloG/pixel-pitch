@@ -177,6 +177,8 @@ export interface MatchState {
   possessor: number;
   /** Intended receiver of the last pass, -1 if none. */
   passTarget: number;
+  /** Stick direction the human passed with; while still held, the receiver runs onto the ball. */
+  passStick: Vec2 | null;
   lastTouch: Team;
   lastToucherId: number;
   referee: { x: number; y: number; vx: number; vy: number };

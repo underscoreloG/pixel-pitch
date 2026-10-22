@@ -75,6 +75,7 @@ export function createMatch(seed: number, settings: MatchSettings = TRAINING): M
     prevButtons: { pass: false, shoot: false, lob: false, switch: false },
     possessor: -1,
     passTarget: -1,
+    passStick: null,
     lastTouch: 'home',
     lastToucherId: -1,
     referee: createReferee(),

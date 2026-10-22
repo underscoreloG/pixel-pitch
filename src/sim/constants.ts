@@ -104,7 +104,7 @@ export const FREE_KICK_DISTANCE = 9.15;
 /** An AI set-piece taker waits this long at the ball before playing it. */
 export const SET_PIECE_DELAY = 0.9;
 /** Pass assist picks a teammate within this angle (radians) of the aim. */
-export const PASS_ASSIST_CONE = 0.6;
+export const PASS_ASSIST_CONE = 0.8;
 /** CPU decision interval (s), tackle success, kick error multiplier, speed factor, body-steal chance per difficulty. */
 export const AI_LEVELS = [
   { decision: 0.35, tackle: 0.25, accuracy: 1.6, speed: 0.92, steal: 0.004 },

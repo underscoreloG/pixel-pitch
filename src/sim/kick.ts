@@ -46,10 +46,10 @@ export function planKick(
       errorDeg = 1.5 + (sprinting ? 2 : 0);
       break;
     case 'shot':
-      speed = 14 + 16 * power;
-      // Over-hitting skies the ball.
-      vz = 1 + 4 * power + Math.max(0, power - 0.85) * 20;
-      errorDeg = 2 + Math.max(0, power - 0.7) * 15 + (sprinting ? 3 : 0);
+      speed = 16 + 16 * power;
+      // A driven shot rises a little; only a maxed-out bar adds real lift.
+      vz = 1.2 + 3 * power + Math.max(0, power - 0.95) * 30;
+      errorDeg = 1.5 + Math.max(0, power - 0.85) * 12 + (sprinting ? 2 : 0);
       break;
     case 'lob':
       speed = 8 + 12 * power;
@@ -121,7 +121,7 @@ export function findPassTarget(s: MatchState, p: Footballer, dirX: number, dirY:
     const dx = t.x - p.x;
     const dy = t.y - p.y;
     const d = Math.hypot(dx, dy);
-    if (d < 3 || d > 55) continue;
+    if (d < 1.5 || d > 55) continue;
     const angle = Math.acos(Math.max(-1, Math.min(1, (dx * dirX + dy * dirY) / d)));
     if (angle > PASS_ASSIST_CONE) continue;
     // Prefer on-line over near: angle dominates, distance breaks ties. The keeper is a last resort.
@@ -170,13 +170,13 @@ export function aimFor(
   return { dirX: lx / l, dirY: ly / l, target: t.id };
 }
 
-/** Ground-pass power that reaches `distance` with a little pace left, from the rolling model. */
-export function passPowerFor(distance: number): number {
+/** Ground-pass power that still has `arrival` m/s of pace when it gets `distance` away. */
+export function passPowerFor(distance: number, arrival = 8): number {
   let lo = 0;
   let hi = 1;
   for (let i = 0; i < 12; i++) {
     const mid = (lo + hi) / 2;
-    if (rollDistance(7 + 15 * mid) < distance + 2.5) lo = mid;
+    if (speedAfter(7 + 15 * mid, distance) < arrival) lo = mid;
     else hi = mid;
   }
   return hi;
@@ -194,10 +194,14 @@ export function lobPowerFor(distance: number): number {
   return hi;
 }
 
-function rollDistance(v0: number): number {
+/** Ball speed once a pass struck at `v0` has travelled `distance` (0 if it stops short). */
+function speedAfter(v0: number, distance: number): number {
   const b: Ball = { x: 0, y: 0, z: 0, vx: v0, vy: 0, vz: 0.4 };
-  for (let i = 0; i < 900 && b.vx > 0.05; i++) stepBall(b, DT);
-  return b.x;
+  for (let i = 0; i < 900 && b.vx > 0.05; i++) {
+    stepBall(b, DT);
+    if (b.x >= distance) return b.vx;
+  }
+  return 0;
 }
 
 function lobCarry(speed: number, vz: number): number {
@@ -254,12 +258,12 @@ export function resolveHumanKick(
   for (let i = 0; i < 2; i++) {
     const speed = throwIn ? 6 + 10 * ideal : type === 'lob' ? 8 + 12 * ideal : 7 + 15 * ideal;
     const d = dist(from, leadPoint(p, mate, speed));
-    ideal = throwIn ? throwPowerFor(d) : type === 'lob' ? lobPowerFor(d) : passPowerFor(d);
+    // Ground passes: the charge sets how firmly it arrives, from 6 m/s (tap) to 14 m/s (full bar), still trappable.
+    ideal = throwIn ? throwPowerFor(d) : type === 'lob' ? lobPowerFor(d) : passPowerFor(d, 6 + 8 * charge);
     aim = aimFor(s, p, type, moveX, moveY, ideal);
   }
   return {
-    // Charge only nudges the weight: a tap is 92% of ideal, a full bar 108%.
-    power: clamp(ideal * (0.92 + 0.16 * charge), 0.05, 1),
+    power: type === 'pass' && !throwIn ? ideal : clamp(ideal * (0.92 + 0.16 * charge), 0.05, 1),
     dirX: aim.dirX,
     dirY: aim.dirY,
     target: aim.target,
@@ -290,7 +294,7 @@ function assistShot(s: MatchState, p: Footballer, charge: number, dx: number, dy
   const ax = goalX - from.x;
   const ay = ty - from.y;
   const n = Math.hypot(ax, ay) || 1;
-  return { power: charge, dirX: ax / n, dirY: ay / n, target: -1, errorMul: 0.6 };
+  return { power: charge, dirX: ax / n, dirY: ay / n, target: -1, errorMul: 0.5 };
 }
 
 /** Throw-in power that lands about 90% of the way (it bounces on to the receiver). */
