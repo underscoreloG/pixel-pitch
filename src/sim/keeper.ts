@@ -47,6 +47,7 @@ export function stepKeeper(s: MatchState, k: Footballer, dt: number): void {
       ball.y = k.y;
       ball.z = 1;
       ball.vx = ball.vy = ball.vz = 0;
+      ball.spin = 0;
       if (gk.stateTimer === 0 && s.phase === 'play') distribute(s, k);
       return;
 
@@ -248,6 +249,7 @@ function tryClaimBall(s: MatchState, k: Footballer): void {
   }
   const dir = attackDir(k.team);
   ball.vx = dir * (Math.abs(ball.vx) * 0.35 + 2);
+  ball.spin = 0;
   ball.vy = ball.vy * 0.3 + randomRange(s.rng, -5, 5);
   ball.vz = randomRange(s.rng, 1.5, 4);
   gk.ignoreBall = 0.4;

@@ -3,8 +3,8 @@ import type { InputFrame } from '../sim/types';
 
 const DEADZONE = 0.18;
 
-// Standard gamepad mapping (Xbox layout): A=0, B=1, X=2, LB=4, RT=7.
-const PAD = { pass: 0, shoot: 1, lob: 2, switch: 4, sprint: 7 } as const;
+// Standard gamepad mapping (Xbox layout): A=0, B=1, X=2, Y=3, LB=4, RB=5, RT=7.
+const PAD = { pass: 0, shoot: 1, lob: 2, through: 3, switch: 4, finesse: 5, sprint: 7 } as const;
 
 /** Merges keyboard and first gamepad into one InputFrame for the sim. */
 export class InputReader {
@@ -12,7 +12,7 @@ export class InputReader {
   private requireRelease = false;
 
   constructor(private scene: Phaser.Scene) {
-    this.keys = scene.input.keyboard!.addKeys('UP,DOWN,LEFT,RIGHT,SHIFT,S,D,A,Q') as Record<
+    this.keys = scene.input.keyboard!.addKeys('UP,DOWN,LEFT,RIGHT,SHIFT,S,D,A,W,E,Q') as Record<
       string,
       Phaser.Input.Keyboard.Key
     >;
@@ -40,6 +40,8 @@ export class InputReader {
       pass: k.S.isDown,
       shoot: k.D.isDown,
       lob: k.A.isDown,
+      through: k.W.isDown,
+      finesse: k.E.isDown,
       switch: k.Q.isDown,
     };
 
@@ -57,10 +59,12 @@ export class InputReader {
       frame.pass ||= pressed(PAD.pass);
       frame.shoot ||= pressed(PAD.shoot);
       frame.lob ||= pressed(PAD.lob);
+      frame.through ||= pressed(PAD.through);
+      frame.finesse ||= pressed(PAD.finesse);
       frame.switch ||= pressed(PAD.switch);
     }
     if (this.requireRelease) {
-      if (frame.pass || frame.shoot || frame.lob) frame.pass = frame.shoot = frame.lob = false;
+      if (frame.pass || frame.shoot || frame.lob || frame.through) frame.pass = frame.shoot = frame.lob = frame.through = false;
       else this.requireRelease = false;
     }
     return frame;

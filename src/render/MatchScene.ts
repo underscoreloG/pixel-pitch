@@ -24,7 +24,7 @@ import { InputReader } from './input';
 import { WORLD_H, WORLD_W, project } from './projection';
 import { BALL_FRAMES, GOAL_TEX_W, createTextures, goalAnchor } from './sprites';
 
-const POWER_COLORS: Record<KickType, number> = { pass: 0x5ad65a, shot: 0xe04848, lob: 0x58a8f0 };
+const POWER_COLORS: Record<KickType, number> = { pass: 0x5ad65a, shot: 0xe04848, lob: 0x58a8f0, through: 0xf0d048 };
 const TEAM_NAME: Record<Team, string> = { home: 'RED', away: 'BLUE' };
 
 /** Art pixels of pitch visible across the screen, per camera setting. */
@@ -430,9 +430,9 @@ export class MatchScene extends Phaser.Scene {
     const input = this.lastInput;
     const power = Math.max(MIN_KICK_POWER, p.charge);
     // Same resolution as the real kick, so the guide shows the assisted result.
-    const aim = resolveHumanKick(s, p, type, power, input.moveX, input.moveY);
-    const plan = planKick(s, p, type, aim.power, aim.dirX, aim.dirY, isSprinting(p, input.sprint), aim.lift);
-    const b: Ball = { x: startX, y: startY, z: plan.z, vx: plan.vx, vy: plan.vy, vz: plan.vz };
+    const aim = resolveHumanKick(s, p, type, power, input.moveX, input.moveY, input.finesse);
+    const plan = planKick(s, p, type, aim.power, aim.dirX, aim.dirY, { ...aim, sprinting: isSprinting(p, input.sprint) });
+    const b: Ball = { x: startX, y: startY, z: plan.z, vx: plan.vx, vy: plan.vy, vz: plan.vz, spin: plan.spin };
     const color = POWER_COLORS[type];
     let crossedGoalLine = false;
     for (let i = 1; i <= 240; i++) {

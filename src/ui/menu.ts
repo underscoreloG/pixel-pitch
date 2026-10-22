@@ -7,7 +7,27 @@ import { type Settings, saveSettings } from './settings';
 export const GAME_TITLE = 'PIXEL PITCH';
 
 export type Mode = 'match' | 'training';
-type Screen = 'main' | 'options' | 'pause' | 'result';
+type Screen = 'main' | 'options' | 'pause' | 'result' | 'controls';
+
+const ARROWS = ['left', 'up', 'down', 'right'].map((d) => `<kbd class="arr ${d}"></kbd>`).join('');
+/** Keyboard controls, shown on the CONTROLS screen. */
+const KEYS: [string, string][] = [
+  [ARROWS, 'Move'],
+  ['<kbd>SHIFT</kbd>', 'Sprint'],
+  ['<kbd>S</kbd>', 'Pass'],
+  ['<kbd>Q</kbd>', 'Switch player'],
+  ['<kbd>D</kbd>', 'Shoot'],
+  ['<kbd>ESC</kbd>', 'Pause'],
+  ['<kbd>A</kbd>', 'Lob / cross'],
+  ['<kbd>E</kbd> + <kbd>D</kbd>', 'Curled shot'],
+  ['<kbd>W</kbd>', 'Through ball'],
+  ['<kbd>E</kbd> + <kbd>A</kbd>', 'Whipped cross'],
+];
+const TIPS = [
+  'Hold a kick key to charge, release to kick.',
+  'Another kick key while charging: fake.',
+  'Defending: hold S to press and tackle, D to slide.',
+];
 
 export interface MenuActions {
   start(mode: Mode): void;
@@ -84,8 +104,11 @@ export class Menu {
         return [
           { label: () => 'MATCH', select: () => this.go(() => this.actions.start('match')) },
           { label: () => 'TRAINING', select: () => this.go(() => this.actions.start('training')) },
+          { label: () => 'CONTROLS', select: () => this.show('controls') },
           { label: () => 'OPTIONS', select: () => this.show('options') },
         ];
+      case 'controls':
+        return [{ label: () => 'BACK', select: () => this.back() }];
       case 'options':
         return [
           { label: () => `SOUND      ${s.sound ? 'ON' : 'OFF'}`, change: () => set('sound', !s.sound) },
@@ -104,13 +127,14 @@ export class Menu {
             label: () => `CAMERA     ${s.camera.toUpperCase()}`,
             change: (d) => set('camera', cycle(CAMERAS, s.camera, d)),
           },
-          { label: () => `CONTROLS   ${s.showHelp ? 'SHOW' : 'HIDE'}`, change: () => set('showHelp', !s.showHelp) },
+          { label: () => `KEY HINTS  ${s.showHelp ? 'SHOW' : 'HIDE'}`, change: () => set('showHelp', !s.showHelp) },
           { label: () => 'BACK', select: () => this.back() },
         ];
       case 'pause':
         return [
           { label: () => 'RESUME', select: () => this.go(() => this.actions.resume()) },
           { label: () => 'RESTART', select: () => this.go(() => this.actions.restart()) },
+          { label: () => 'CONTROLS', select: () => this.show('controls') },
           { label: () => 'OPTIONS', select: () => this.show('options') },
           { label: () => 'MAIN MENU', select: () => this.toMain() },
         ];
@@ -135,7 +159,7 @@ export class Menu {
   }
 
   private back(): void {
-    if (this.screen === 'options') this.show(this.inGame ? 'pause' : 'main');
+    if (this.screen === 'options' || this.screen === 'controls') this.show(this.inGame ? 'pause' : 'main');
     else if (this.screen === 'pause') this.go(() => this.actions.resume());
   }
 
@@ -188,20 +212,30 @@ export class Menu {
     this.render();
   }
 
+  private heading(): string {
+    switch (this.screen) {
+      case 'main':
+        return `<h1>${GAME_TITLE}</h1>`;
+      case 'options':
+        return '<h2>OPTIONS</h2>';
+      case 'controls': {
+        const keys = KEYS.map(([k, what]) => `<span>${k} ${what}</span>`).join('');
+        return `<h2>CONTROLS</h2><div class="keys">${keys}</div><div class="tips">${TIPS.join('<br />')}</div>`;
+      }
+      case 'pause':
+        return '<h2>PAUSED</h2>';
+      default:
+        return `<h2>FULL TIME</h2><p class="result">${this.resultText}</p>`;
+    }
+  }
+
   private render(): void {
     if (!this.screen) {
       this.root.hidden = true;
       return;
     }
     this.root.hidden = false;
-    const heading =
-      this.screen === 'main'
-        ? `<h1>${GAME_TITLE}</h1>`
-        : this.screen === 'options'
-          ? '<h2>OPTIONS</h2>'
-          : this.screen === 'pause'
-            ? '<h2>PAUSED</h2>'
-            : `<h2>FULL TIME</h2><p class="result">${this.resultText}</p>`;
+    const heading = this.heading();
     const list = this.items
       .map(
         (it, i) =>
@@ -211,6 +245,8 @@ export class Menu {
     const hint =
       this.screen === 'options'
         ? 'LEFT/RIGHT CHANGE | ESC BACK'
+        : this.screen === 'controls'
+          ? 'ESC BACK'
         : 'ARROWS MOVE | ENTER SELECT' + (this.screen === 'pause' ? ' | ESC RESUME' : '');
     const version = this.screen === 'main' ? `<p class="version">v${__APP_VERSION__}</p>` : '';
     this.root.innerHTML = `<div class="panel">${heading}<ul>${list}</ul><p class="hint">${hint}</p>${version}</div>`;

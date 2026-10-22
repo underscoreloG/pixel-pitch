@@ -56,6 +56,7 @@ export function standingTackle(
       ball.x = tackler.x + tackler.facingX * 0.5;
       ball.y = tackler.y + tackler.facingY * 0.5;
       ball.vx = tackler.vx;
+      ball.spin = 0;
       ball.vy = tackler.vy;
       ball.vz = 0;
       s.possessor = tackler.id;
@@ -66,6 +67,7 @@ export function standingTackle(
       const bd = Math.hypot(bx, by) || 1;
       const speed = randomRange(s.rng, 3, 6);
       ball.vx = (bx / bd) * speed + tackler.vx * 0.3;
+      ball.spin = 0;
       ball.vy = (by / bd) * speed + tackler.vy * 0.3;
       ball.vz = 0;
       s.possessor = -1;
@@ -113,6 +115,7 @@ export function stepSlide(s: MatchState, p: Footballer, dt: number): void {
       if (carrier) carrier.kickCooldown = 0.4;
       const speed = randomRange(s.rng, 6, 10);
       ball.vx = p.facingX * speed + randomRange(s.rng, -1.5, 1.5);
+      ball.spin = 0;
       ball.vy = p.facingY * speed + randomRange(s.rng, -1.5, 1.5);
       ball.vz = randomRange(s.rng, 0, 1);
       s.possessor = -1;
@@ -162,6 +165,7 @@ export function commitFoul(s: MatchState, offender: Footballer, victim: Football
   s.possessor = -1;
   s.passTarget = -1;
   s.ball.vx *= 0.3;
+  s.ball.spin = 0;
   s.ball.vy *= 0.3;
   victim.down = FALL_TIME;
   emit(s, 'foul', { team: offender.team, playerId: offender.id });

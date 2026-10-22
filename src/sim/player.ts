@@ -27,14 +27,14 @@ import {
 } from './constants';
 import { stepBall } from './ball';
 import { emit } from './events';
-import { isSprinting, kickBall, resolveHumanKick } from './kick';
+import { isSprinting, kickBall, receiveAt, resolveHumanKick } from './kick';
 import { random, randomRange } from './rng';
 import { active, byId, clamp, dist } from './team';
 import { fromBehind, standingTackle, startSlide } from './tackle';
 import type { Buttons, Footballer, InputFrame, KickType, MatchState, Role, Team } from './types';
 
-const BUTTON_FOR: Record<KickType, keyof Buttons> = { pass: 'pass', shot: 'shoot', lob: 'lob' };
-const KICK_ORDER: KickType[] = ['shot', 'pass', 'lob'];
+const BUTTON_FOR: Record<KickType, keyof Buttons> = { pass: 'pass', shot: 'shoot', lob: 'lob', through: 'through' };
+const KICK_ORDER: KickType[] = ['shot', 'pass', 'lob', 'through'];
 export const FAKE_TIME = 0.35;
 
 export function createFootballer(
@@ -219,6 +219,7 @@ export function resolvePossession(s: MatchState): void {
     const tx = carrier.x + carrier.facingX * lead;
     const ty = carrier.y + carrier.facingY * lead;
     ball.vx = carrier.vx + (tx - ball.x) * DRIBBLE_STIFFNESS;
+    ball.spin = 0;
     ball.vy = carrier.vy + (ty - ball.y) * DRIBBLE_STIFFNESS;
     ball.vz = Math.min(ball.vz, 0);
     return;
@@ -230,6 +231,7 @@ export function resolvePossession(s: MatchState): void {
     if (!canControl(p) || p.team === s.lastTouch) continue;
     if (dist(p, ball) > 0.42 || ball.z > 1.8 || trappable(s, p)) continue;
     ball.vx = -ball.vx * 0.25 + randomRange(s.rng, -2, 2);
+    ball.spin = 0;
     ball.vy = ball.vy * 0.3 + randomRange(s.rng, -3, 3);
     ball.vz = Math.abs(ball.vz) * 0.3 + randomRange(s.rng, 0, 2);
     p.kickCooldown = 0.3;
@@ -301,7 +303,13 @@ export function nearestHome(s: MatchState, excludeId = -1): Footballer | undefin
  * an opponent has the ball (pass = standing, shoot = slide).
  */
 export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
-  const buttons: Buttons = { pass: input.pass, shoot: input.shoot, lob: input.lob, switch: input.switch };
+  const buttons: Buttons = {
+    pass: input.pass,
+    shoot: input.shoot,
+    lob: input.lob,
+    through: input.through,
+    switch: input.switch,
+  };
   const pressed = (b: keyof Buttons) => buttons[b] && !s.prevButtons[b];
 
   let p = byId(s, s.controlled);
@@ -342,8 +350,8 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     const n = Math.hypot(tx, ty) || 1;
     locomote(p, tx / n, ty / n, input.sprint, false, dt);
   } else if (s.passTarget === p.id && !carrier && canMove(p) && receiverOnAuto(s, input)) {
-    // Receiving a pass: cut across to meet the ball until the player steers somewhere new.
-    const meet = meetingPoint(s, p);
+    // Receiving a pass: cut across to meet the ball (or run onto a through ball) until the player steers somewhere new.
+    const meet = receiveAt(s, meetingPoint(s, p));
     const tx = meet.x - p.x;
     const ty = meet.y - p.y;
     const n = Math.hypot(tx, ty) || 1;
@@ -371,20 +379,15 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
       startSlide(s, p, s.ball.x - p.x, s.ball.y - p.y);
     }
   } else if (canMove(p)) {
-    chargeKicks(s, p, buttons, pressed, dt);
+    chargeKicks(s, p, buttons, pressed, input.finesse, dt);
   }
   s.prevButtons = buttons;
 
   if (p.pending) {
     if (canKickNow(s, p)) {
       const sprint = isSprinting(p, input.sprint);
-      const k = resolveHumanKick(s, p, p.pending.type, p.pending.power, input.moveX, input.moveY);
-      kickBall(s, p, p.pending.type, k.power, k.dirX, k.dirY, {
-        sprinting: sprint,
-        errorMul: k.errorMul,
-        target: k.target,
-        lift: k.lift,
-      });
+      const k = resolveHumanKick(s, p, p.pending.type, p.pending.power, input.moveX, input.moveY, p.pending.finesse);
+      kickBall(s, p, p.pending.type, k.power, k.dirX, k.dirY, { ...k, sprinting: sprint });
       // Control follows the pass, FIFA style; the stick used to aim it doesn't steer the receiver.
       if (k.target >= 0) {
         s.controlled = k.target;
@@ -403,6 +406,7 @@ function chargeKicks(
   p: Footballer,
   buttons: Buttons,
   pressed: (b: keyof Buttons) => boolean,
+  finesse: boolean,
   dt: number,
 ): void {
   if (!p.charging) {
@@ -429,7 +433,7 @@ function chargeKicks(
   if (buttons[BUTTON_FOR[p.charging]]) {
     p.charge = Math.min(1, p.charge + dt / CHARGE_TIME);
   } else {
-    p.pending = { type: p.charging, power: Math.max(MIN_KICK_POWER, p.charge), ttl: KICK_BUFFER_TIME };
+    p.pending = { type: p.charging, power: Math.max(MIN_KICK_POWER, p.charge), ttl: KICK_BUFFER_TIME, finesse };
     p.charging = null;
     p.charge = 0;
   }

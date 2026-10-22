@@ -2,6 +2,13 @@
 
 The version on the main menu comes from `package.json`. Every release bumps it: minor for new features, patch for fixes.
 
+## 0.8.0 - 2026-10-22
+
+- Through balls (W / gamepad Y): played into the space ahead of a teammate, who runs onto it in stride. The CPU plays them too.
+- Ball spin: curled shots and crosses bend in the air (barely on the grass).
+- Finesse (hold E / RB with shoot or lob): a curled shot that starts outside the post and bends in, or a whipped cross. The CPU curls some shots from the edge of the box.
+- Key hints are one compact row of keycaps (keyboard only); the full controls and tips moved to a CONTROLS screen in the main and pause menus.
+
 ## 0.7.0 - 2026-10-22
 
 - Faster passes: even a tap arrives at 13-16 m/s, a full bar at about 20 m/s; long passes keep their pace.

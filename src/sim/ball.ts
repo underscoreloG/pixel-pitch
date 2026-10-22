@@ -7,10 +7,23 @@ import {
   MIN_BOUNCE_SPEED,
   ROLL_DRAG,
   ROLL_RESIST,
+  SPIN_DECAY_AIR,
+  SPIN_DECAY_GROUND,
 } from './constants';
 import type { Ball } from './types';
 
 export function stepBall(ball: Ball, dt: number): void {
+  const spin = ball.spin ?? 0;
+  if (spin !== 0) {
+    // Curl: the spin turns the path sideways, strongly in the air and only a little on the grass.
+    const airborne = ball.z > 0 || ball.vz > 0;
+    const k = spin * dt * (airborne ? 1 : 0.25);
+    const vx = ball.vx;
+    ball.vx -= ball.vy * k;
+    ball.vy += vx * k;
+    const next = spin * (1 - (airborne ? SPIN_DECAY_AIR : SPIN_DECAY_GROUND) * dt);
+    ball.spin = Math.abs(next) < 0.01 ? 0 : next;
+  }
   if (ball.z <= 0 && ball.vz <= 0) {
     // Rolling on grass: linear drag plus constant resistance, so it actually stops.
     ball.z = 0;

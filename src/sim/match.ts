@@ -49,6 +49,8 @@ export const NO_INPUT: InputFrame = {
   pass: false,
   shoot: false,
   lob: false,
+  through: false,
+  finesse: false,
   switch: false,
 };
 
@@ -72,10 +74,11 @@ export function createMatch(seed: number, settings: MatchSettings = TRAINING): M
     ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 },
     players,
     controlled: players.find((p) => p.team === 'home' && p.number === 9)!.id,
-    prevButtons: { pass: false, shoot: false, lob: false, switch: false },
+    prevButtons: { pass: false, shoot: false, lob: false, through: false, switch: false },
     possessor: -1,
     passTarget: -1,
     passStick: null,
+    passSpace: null,
     lastTouch: 'home',
     lastToucherId: -1,
     referee: createReferee(),
@@ -94,7 +97,7 @@ export function createMatch(seed: number, settings: MatchSettings = TRAINING): M
 
 /** Everyone back in shape, ball on the spot. In a match the kickoff is a dead ball the kicking side must play. */
 export function kickoff(s: MatchState, team: Team): void {
-  Object.assign(s.ball, { x: CENTER.x, y: CENTER.y, z: 0, vx: 0, vy: 0, vz: 0 });
+  Object.assign(s.ball, { x: CENTER.x, y: CENTER.y, z: 0, vx: 0, vy: 0, vz: 0, spin: 0 });
   for (const p of active(s)) {
     const spot = p.gk
       ? { x: ownGoalX(p.team) + attackDir(p.team) * 0.5, y: CENTER.y }
@@ -194,6 +197,7 @@ function checkGoalLines(s: MatchState, prev: { x: number; y: number; z: number }
         ball.x = gx - outward * hitDist;
         ball.vx = -ball.vx * 0.6;
         ball.vy += Math.sign(y - py || 1) * Math.abs(ball.vx) * 0.3;
+        ball.spin = 0;
         emit(s, 'post');
         return;
       }
@@ -202,6 +206,7 @@ function checkGoalLines(s: MatchState, prev: { x: number; y: number; z: number }
     if (betweenPosts && Math.abs(z - GOAL_HEIGHT) < hitDist) {
       ball.x = gx - outward * hitDist;
       ball.vx = -ball.vx * 0.6;
+      ball.spin = 0;
       ball.vz = z < GOAL_HEIGHT ? -Math.abs(ball.vz) - 1 : Math.abs(ball.vz) + 1;
       emit(s, 'bar');
       return;
@@ -309,7 +314,7 @@ function nearestOutfield(s: MatchState, team: Team, at: { x: number; y: number }
 }
 
 function setPieceFor(s: MatchState, type: SetPieceType, team: Team, x: number, y: number, taker: Footballer): void {
-  Object.assign(s.ball, { x, y, z: 0, vx: 0, vy: 0, vz: 0 });
+  Object.assign(s.ball, { x, y, z: 0, vx: 0, vy: 0, vz: 0, spin: 0 });
   s.possessor = -1;
   s.passTarget = -1;
   s.setPiece = { type, team, x, y, takerId: taker.id, timer: team === 'home' ? 0.2 : SET_PIECE_DELAY };

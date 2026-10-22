@@ -16,7 +16,16 @@
       #msg { margin-top: 18px; font-size: 24px; white-space: pre-line; line-height: 34px; text-shadow: 3px 3px 0 #000; min-height: 32px; }
       #clock { display: inline-block; background: rgba(0, 0, 0, 0.6); padding: 8px 10px; font-size: 14px; margin-left: 4px; color: #f4d35e; }
       #clock:empty { display: none; }
-      #help { position: fixed; bottom: 10px; left: 0; right: 0; text-align: center; font-size: 9px; line-height: 16px; opacity: 0.75; pointer-events: none; }
+      kbd { display: inline-block; font-family: inherit; font-size: 7px; line-height: 9px; min-width: 9px; padding: 2px 3px 1px; text-align: center; color: #0d130d; background: #f4f4e8; border-radius: 2px; box-shadow: 0 2px 0 #8c8c78; position: relative; vertical-align: middle; }
+      kbd.arr { width: 9px; height: 9px; padding: 2px 3px 1px; }
+      kbd.arr::before { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 0 solid transparent; }
+      kbd.up::before { border-width: 0 3px 4px; border-bottom-color: #0d130d; }
+      kbd.down::before { border-width: 4px 3px 0; border-top-color: #0d130d; }
+      kbd.left::before { border-width: 3px 4px 3px 0; border-right-color: #0d130d; }
+      kbd.right::before { border-width: 3px 0 3px 4px; border-left-color: #0d130d; }
+      #help { position: fixed; bottom: 8px; left: 12px; right: 12px; width: fit-content; margin: 0 auto; box-sizing: border-box; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; padding: 7px 12px 6px; background: rgba(0, 0, 0, 0.5); font-size: 7px; line-height: 13px; opacity: 0.85; pointer-events: none; }
+      #help[hidden] { display: none; }
+      #help span { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
       #radar { position: fixed; top: 12px; right: 12px; width: 168px; height: 109px; opacity: 0.85; image-rendering: pixelated; }
       #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(6, 12, 6, 0.62); }
       #menu[hidden] { display: none; }
@@ -31,6 +40,10 @@
       #menu li.opt.on::after { content: ' <>'; opacity: 0.6; }
       #menu .hint { font-size: 8px; opacity: 0.6; margin: 22px 0 0; }
       #menu .version { font-size: 8px; opacity: 0.45; margin: 12px 0 0; }
+      #menu .keys { display: grid; grid-template-columns: auto auto; gap: 10px 28px; text-align: left; font-size: 9px; line-height: 14px; margin: 0 0 18px; }
+      #menu .keys span { white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+      #menu .keys kbd { font-size: 8px; }
+      #menu .tips { font-size: 8px; line-height: 16px; opacity: 0.75; margin: 0 0 18px; text-align: left; }
     </style>
   </head>
   <body>
@@ -39,9 +52,15 @@
     <canvas id="radar" width="210" height="136" hidden></canvas>
     <div id="menu" hidden></div>
     <div id="help" hidden>
-      Keyboard: Arrows move | S pass | D shoot | A lob | Shift sprint | Q switch | Esc pause<br />
-      Gamepad: left stick | RT sprint | A pass | B shoot | X lob | LB switch<br />
-      Hold to charge, release to kick | Other kick button while charging = fake | Defending: hold S to press and tackle, D slide
+      <span><kbd class="arr left"></kbd><kbd class="arr up"></kbd><kbd class="arr down"></kbd><kbd class="arr right"></kbd> Move</span>
+      <span><kbd>S</kbd> Pass</span>
+      <span><kbd>D</kbd> Shoot</span>
+      <span><kbd>A</kbd> Lob</span>
+      <span><kbd>W</kbd> Through</span>
+      <span><kbd>E</kbd> Curl</span>
+      <span><kbd>SHIFT</kbd> Sprint</span>
+      <span><kbd>Q</kbd> Switch</span>
+      <span><kbd>ESC</kbd> Pause</span>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

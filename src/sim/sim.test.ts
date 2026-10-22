@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { predictCrossing, stepBall } from './ball';
-import { CENTER, DT, FOUL_PAUSE, GOAL_HEIGHT, MIN_KICK_POWER, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
+import { CENTER, DT, FINESSE_SPIN, FOUL_PAUSE, GOAL_HEIGHT, MIN_KICK_POWER, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
 import { findPassTarget, planKick, resolveHumanKick } from './kick';
 import { NO_INPUT, createMatch, kickoff, stepMatch } from './match';
 import { commitFoul } from './tackle';
@@ -17,7 +17,7 @@ function run(s: MatchState, seconds: number, input: InputFrame = NO_INPUT): void
 }
 
 /** Press a button for `hold` seconds, then release for one tick. */
-function press(s: MatchState, button: 'pass' | 'shoot' | 'lob', hold = 0.2, extra: Partial<InputFrame> = {}): void {
+function press(s: MatchState, button: 'pass' | 'shoot' | 'lob' | 'through', hold = 0.2, extra: Partial<InputFrame> = {}): void {
   run(s, hold, { ...NO_INPUT, ...extra, [button]: true });
   stepMatch(s, { ...NO_INPUT, ...extra });
 }
@@ -400,7 +400,7 @@ describe('defending and assisted kicks', () => {
       Object.assign(me, { x: 89, y: 34, facingX: 1, facingY: 0 });
       // A bouncing ball met at knee height, fully charged.
       Object.assign(s.ball, ball({ x: 89.6, y: 34, z: 0.7 }));
-      me.pending = { type: 'shot', power: 1, ttl: 0.25 };
+      me.pending = { type: 'shot', power: 1, ttl: 0.25, finesse: false };
       stepMatch(s, { ...NO_INPUT, moveX: 1, moveY: 0.1 });
       return predictCrossing(s.ball, PITCH_LENGTH, 3)?.z ?? NaN;
     };
@@ -419,7 +419,7 @@ describe('defending and assisted kicks', () => {
     Object.assign(s.ball, ball({ x: 50, y: 20.9 }));
     const k = resolveHumanKick(s, me, 'pass', MIN_KICK_POWER, -1, 0);
     expect(k.target).toBe(mate.id);
-    const plan = planKick(s, me, 'pass', k.power, k.dirX, k.dirY, true);
+    const plan = planKick(s, me, 'pass', k.power, k.dirX, k.dirY, { sprinting: true });
     const tx = mate.x - s.ball.x;
     const ty = mate.y - s.ball.y;
     const cos = (plan.vx * tx + plan.vy * ty) / (Math.hypot(plan.vx, plan.vy) * Math.hypot(tx, ty));
@@ -445,6 +445,85 @@ describe('defending and assisted kicks', () => {
     expect(findPassTarget(s, me, -1, 0)?.id).toBe(open.id);
     Object.assign(blue, { x: 42, y: 45 });
     expect(findPassTarget(s, me, -1, 0)?.id).toBe(near.id);
+  });
+});
+
+describe('through balls and curl', () => {
+  it('a through ball goes into the space ahead of the runner, and he gets there first', () => {
+    for (let seed = 1; seed <= 5; seed++) {
+      const s = createMatch(seed, MATCH);
+      const passer = s.players.find((p) => p.team === 'home' && p.number === 10)!;
+      const runner = s.players.find((p) => p.team === 'home' && p.number === 9)!;
+      const blue = s.players.find((p) => p.team === 'away' && p.number === 5)!;
+      s.controlled = passer.id;
+      only(s, passer, runner, blue);
+      Object.assign(passer, { x: 55, y: 30, facingX: 1, facingY: 0 });
+      Object.assign(runner, { x: 70, y: 36, vx: 0, vy: 0 });
+      Object.assign(blue, { x: 72, y: 26, vx: 0, vy: 0, think: 99 });
+      Object.assign(s.ball, ball({ x: 55.6, y: 30 }));
+      s.possessor = passer.id;
+      const n = Math.hypot(15, 6);
+      press(s, 'through', 0.3, { moveX: 15 / n, moveY: 6 / n });
+      expect(s.passTarget).toBe(runner.id);
+      // Played beyond him, not to his feet.
+      const crossing = predictCrossing(s.ball, runner.x + 4, 3);
+      expect(crossing).not.toBeNull();
+      // He takes it in stride, beyond where he started.
+      for (let i = 0; i < 3 / DT && s.possessor !== runner.id; i++) stepMatch(s, NO_INPUT);
+      expect(s.possessor).toBe(runner.id);
+      expect(runner.x).toBeGreaterThan(74);
+    }
+  });
+
+  it('spin curls the ball in the air, and barely on the grass', () => {
+    const flight = (spin: number, vz: number) => {
+      const b = ball({ vx: 25, vz, spin });
+      while (b.x < 20) stepBall(b, DT);
+      return b.y;
+    };
+    expect(flight(0, 3)).toBeCloseTo(0, 5);
+    expect(Math.abs(flight(FINESSE_SPIN, 3))).toBeGreaterThan(1.5);
+    expect(Math.abs(flight(FINESSE_SPIN, 3))).toBeLessThan(4);
+    expect(Math.abs(flight(FINESSE_SPIN, 0))).toBeLessThan(Math.abs(flight(FINESSE_SPIN, 3)) / 2);
+  });
+
+  it('an assisted finesse shot starts outside the post and curls in just inside it', () => {
+    const s = createMatch(3, MATCH);
+    const me = human(s);
+    only(s, me);
+    Object.assign(me, { x: 85, y: 24, facingX: 1, facingY: 0 });
+    Object.assign(s.ball, ball({ x: 85.6, y: 24 }));
+    s.possessor = me.id;
+    // Aim at the far post, finesse held.
+    const dx = 105 - 85.6;
+    const dy = 34 + 3.66 - 24;
+    const n = Math.hypot(dx, dy);
+    press(s, 'shoot', 0.4, { moveX: dx / n, moveY: dy / n, finesse: true });
+    expect(Math.abs(s.ball.spin ?? 0)).toBeGreaterThan(0.3);
+    // Heading wide of the far post at first...
+    const straightY = s.ball.y + (s.ball.vy / s.ball.vx) * (105 - s.ball.x);
+    expect(straightY).toBeGreaterThan(34 + 3.66);
+    // ...and it bends back inside it.
+    const c = predictCrossing(s.ball, 105, 3)!;
+    expect(c.y).toBeLessThan(34 + 3.66 - 0.1);
+    expect(c.y).toBeGreaterThan(34 + 3.66 - 1);
+    expect(c.z).toBeLessThan(GOAL_HEIGHT);
+  });
+
+  it('the CPU plays through balls and curls shots in a match', () => {
+    const s = createMatch(11, { mode: 'match', duration: 300, difficulty: 1, autoplay: true });
+    const kinds = new Set<string>();
+    let curled = 0;
+    while (s.phase !== 'full-time') {
+      stepMatch(s, NO_INPUT);
+      for (const e of s.events) if (e.type === 'kick' && e.tick === s.tick - 1) {
+        kinds.add(e.kick!);
+        if (e.kick === 'shot' && Math.abs(s.ball.spin ?? 0) > 0.2) curled++;
+      }
+      s.events.length = 0;
+    }
+    expect(kinds.has('through')).toBe(true);
+    expect(curled).toBeGreaterThan(0);
   });
 });
 

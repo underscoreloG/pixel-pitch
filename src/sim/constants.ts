@@ -105,6 +105,13 @@ export const FREE_KICK_DISTANCE = 9.15;
 export const SET_PIECE_DELAY = 0.9;
 /** Pass assist picks a teammate within this angle (radians) of the aim. */
 export const PASS_ASSIST_CONE = 0.8;
+/** Pace (m/s) a through ball has left when it reaches the space it was played into. */
+export const THROUGH_ARRIVAL = 6;
+/** Side spin of a finesse shot (rad/s its path turns): a curl of 2-3 m over 20 m. */
+export const FINESSE_SPIN = 0.35;
+/** Spin decay per second in the air and on the grass. */
+export const SPIN_DECAY_AIR = 0.3;
+export const SPIN_DECAY_GROUND = 3;
 /** CPU decision interval (s), tackle success, kick error multiplier, speed factor, body-steal chance per difficulty. */
 export const AI_LEVELS = [
   { decision: 0.35, tackle: 0.25, accuracy: 1.6, speed: 0.92, steal: 0.004 },

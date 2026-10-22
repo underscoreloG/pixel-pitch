@@ -3,6 +3,7 @@ import {
   AI_LEVELS,
   CENTER,
   DT,
+  FINESSE_SPIN,
   FREE_KICK_DISTANCE,
   GOAL_WIDTH,
   KICK_RADIUS,
@@ -12,8 +13,9 @@ import {
   PLAYER_SPRINT_SPEED,
   SLIDE_RANGE,
   TACKLE_RANGE,
+  THROUGH_ARRIVAL,
 } from './constants';
-import { kickBall, leadPoint, lobPowerFor, passPowerFor } from './kick';
+import { curlTowards, curledAim, kickBall, leadPoint, lobPowerFor, passPowerFor, receiveAt, throughSpace } from './kick';
 import { canKickNow, canMove, locomote } from './player';
 import { random } from './rng';
 import { standingTackle, startSlide } from './tackle';
@@ -133,7 +135,8 @@ function decide(s: MatchState, p: Footballer, info: TickInfo): Target {
     s.passTarget === p.id ||
     (!carrier && !passToMate && info.chaser[p.team] === p.id && !keeperHolding(s))
   ) {
-    return { ...interceptPoint(p, info.path), sprint: true };
+    const meet = interceptPoint(p, info.path);
+    return { ...(s.passTarget === p.id ? receiveAt(s, meet) : meet), sprint: true };
   }
 
   if (carrier && carrier.team !== p.team) {
@@ -222,13 +225,16 @@ function carry(s: MatchState, p: Footballer): Target {
     const pass = bestPass(s, p, opps);
     if (pass && (pass.score > 6 || (pressure < 2.5 && pass.score > -3) || teamU(p.team, p.x) < 0.2)) {
       const d = dist(p, pass.lead);
+      const n = d || 1;
+      const opts = { errorMul: level.accuracy, target: pass.mate.id };
+      if (pass.through) {
+        const space = pass.lead;
+        kickBall(s, p, 'through', passPowerFor(d, THROUGH_ARRIVAL), (space.x - p.x) / n, (space.y - p.y) / n, { ...opts, space });
+        return { x: p.x, y: p.y };
+      }
       const lofted = d > 28 || pass.laneBlocked;
       const power = lofted ? lobPowerFor(d) : passPowerFor(d);
-      const n = d || 1;
-      kickBall(s, p, lofted ? 'lob' : 'pass', power, (pass.lead.x - p.x) / n, (pass.lead.y - p.y) / n, {
-        errorMul: level.accuracy,
-        target: pass.mate.id,
-      });
+      kickBall(s, p, lofted ? 'lob' : 'pass', power, (pass.lead.x - p.x) / n, (pass.lead.y - p.y) / n, opts);
       return { x: p.x, y: p.y };
     }
   }
@@ -266,6 +272,13 @@ function shoot(s: MatchState, p: Footballer, goal: Vec2, toGoal: number, penalty
   const dy = ty - p.y;
   const n = Math.hypot(dx, dy) || 1;
   const power = penalty ? 0.62 + random(s.rng) * 0.18 : clamp(0.6 + toGoal * 0.014, 0.6, 0.92);
+  // From the edge of the box, sometimes curl it in instead of driving it.
+  if (!penalty && toGoal > 11 && toGoal < 26 && random(s.rng) < 0.4) {
+    const spin = curlTowards(dx, dy, CENTER.y - ty) * FINESSE_SPIN;
+    const dir = curledAim(s, p, 'shot', power, spin, { x: goal.x, y: ty });
+    kickBall(s, p, 'shot', power, dir.dirX, dir.dirY, { errorMul: level.accuracy, finesse: true, spin });
+    return;
+  }
   kickBall(s, p, 'shot', power, dx / n, dy / n, { errorMul: level.accuracy });
 }
 
@@ -274,6 +287,8 @@ interface PassOption {
   lead: Vec2;
   score: number;
   laneBlocked: boolean;
+  /** Played into the space ahead of him rather than to his feet. */
+  through?: boolean;
 }
 
 /** Scores every teammate: forward progress, space around him, and how open the lane is. */
@@ -291,6 +306,16 @@ function bestPass(s: MatchState, p: Footballer, opps: Footballer[]): PassOption 
     const marked = space < 3 ? -6 : 0;
     const score = progress * 0.5 + space + marked - d * 0.05 + (laneBlocked ? -8 : lane * 0.4);
     if (!best || score > best.score) best = { mate, lead, score, laneBlocked };
+
+    // A runner in the attacking half can be played in behind, if he wins the race to the space.
+    if (mate.role === 'DF' || teamU(p.team, mate.x) < 0.5) continue;
+    const gap = throughSpace(mate, attackDir(p.team), 0, 0.35);
+    const race = Math.min(...opps.map((o) => dist(o, gap))) - dist(mate, gap);
+    const tLane = Math.min(10, ...opps.map((o) => segmentDistance(o, p, gap)));
+    if (race < 1.5 || tLane < 2.5) continue;
+    const tProgress = (teamU(p.team, gap.x) - teamU(p.team, p.x)) * PITCH_LENGTH;
+    const tScore = tProgress * 0.5 + Math.min(8, race * 1.5) - 3 - dist(p, gap) * 0.05 + tLane * 0.4;
+    if (tScore > best.score) best = { mate, lead: gap, score: tScore, laneBlocked: false, through: true };
   }
   return best;
 }

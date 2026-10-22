@@ -45,11 +45,14 @@ Every push to `main` runs the tests, builds and deploys to GitHub Pages (`.githu
 | Sprint | Shift | RT |
 | Pass / hold to press and tackle | S | A |
 | Shoot / slide tackle | D | B |
-| Lob | A | X |
+| Lob / cross | A | X |
+| Through ball | W | Y |
+| Finesse (hold with shoot or lob: curled shot, whipped cross) | E | RB |
 | Switch player | Q | LB |
 | Pause | Esc | |
 
 Hold a kick button to charge, release to kick. Press another kick button while charging to fake.
+A through ball goes into the space ahead of the teammate you aim at (more charge, further ahead) and he runs onto it.
 Passes and lobs snap to the teammate in the stick direction (preferring one with an open lane) with the right weight; control follows the pass.
 Shots aimed near the goal are pulled inside the posts and kept under the bar, and kicks on the run allow for your momentum (Options > KICKS: MANUAL turns the assistance off).
 Defending: hold S to run at the ball carrier and tackle when in range; getting your body on the ball can win it too.

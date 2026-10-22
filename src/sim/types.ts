@@ -10,9 +10,11 @@ export interface Ball {
   vx: number;
   vy: number;
   vz: number;
+  /** Side spin: rad/s its path turns (+ from +x towards +y). Curls in the air, barely on the grass. */
+  spin?: number;
 }
 
-export type KickType = 'pass' | 'shot' | 'lob';
+export type KickType = 'pass' | 'shot' | 'lob' | 'through';
 
 /** One tick of controller state. Move axes are -1..1, +y is towards the camera. */
 export interface InputFrame {
@@ -22,6 +24,10 @@ export interface InputFrame {
   pass: boolean;
   shoot: boolean;
   lob: boolean;
+  /** Through ball into the space ahead of a teammate. */
+  through: boolean;
+  /** Held with shoot or lob: a curled (finesse) shot or a whipped cross. */
+  finesse: boolean;
   /** Switch to the teammate nearest the ball. */
   switch: boolean;
 }
@@ -30,6 +36,7 @@ export interface Buttons {
   pass: boolean;
   shoot: boolean;
   lob: boolean;
+  through: boolean;
   switch: boolean;
 }
 
@@ -37,6 +44,8 @@ export interface PendingKick {
   type: KickType;
   power: number;
   ttl: number;
+  /** Finesse was held when the button was released. */
+  finesse: boolean;
 }
 
 /** home = the human side (red, attacks +x), away = the CPU side (blue, attacks -x). */
@@ -157,6 +166,8 @@ export interface MatchEvent {
   team?: Team;
   playerId?: number;
   card?: Card;
+  /** For 'kick': what kind of kick. */
+  kick?: KickType;
 }
 
 export type Phase = 'play' | 'goal' | 'out' | 'foul' | 'full-time';
@@ -179,6 +190,8 @@ export interface MatchState {
   passTarget: number;
   /** Stick direction the human passed with; while still held, the receiver runs onto the ball. */
   passStick: Vec2 | null;
+  /** Where the last through ball was played into: its receiver runs there to take it in stride. */
+  passSpace: Vec2 | null;
   lastTouch: Team;
   lastToucherId: number;
   referee: { x: number; y: number; vx: number; vy: number };
