@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sprite Viewer</title>
+    <style>
+      body { margin: 0; padding: 12px; background: #3f8a37; color: #fff; font: 12px monospace; }
+      canvas { image-rendering: pixelated; display: block; margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <!-- Dev tool: every generated figure frame, scaled up. Not part of the game build. -->
+    <div id="out"></div>
+    <script type="module">
+      import { DIRECTIONS, FIG_H, FIG_W, POSES, directionYaw, renderFigure } from '/src/render/figure.ts';
+      import { KITS } from '/src/render/sprites.ts';
+      const params = new URLSearchParams(location.search);
+      const kit = KITS[params.get('kit') ?? 'home'];
+      const only = params.get('poses')?.split(',');
+      const dirs = params.get('dirs')?.split(',').map(Number) ?? [...Array(DIRECTIONS).keys()];
+      const scale = Number(params.get('scale') ?? 4);
+      const poses = POSES.filter((p) => !only || only.some((o) => p.name.startsWith(o)));
+      const c = document.createElement('canvas');
+      c.width = FIG_W * poses.length;
+      c.height = FIG_H * dirs.length;
+      c.style.width = c.width * scale + 'px';
+      const ctx = c.getContext('2d');
+      dirs.forEach((d, row) =>
+        poses.forEach(({ pose }, col) =>
+          ctx.putImageData(new ImageData(renderFigure(pose, directionYaw(d), kit), FIG_W, FIG_H), col * FIG_W, row * FIG_H),
+        ),
+      );
+      document.getElementById('out').append(poses.map((p) => p.name).join(' '), c);
+    </script>
+  </body>
+</html>

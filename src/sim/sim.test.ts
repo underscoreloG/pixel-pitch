@@ -1,0 +1,371 @@
+import { describe, expect, it } from 'vitest';
+import { predictCrossing, stepBall } from './ball';
+import { CENTER, DT, FOUL_PAUSE, GOAL_HEIGHT, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
+import { NO_INPUT, createMatch, kickoff, stepMatch } from './match';
+import type { Ball, Footballer, InputFrame, MatchSettings, MatchState } from './types';
+
+const MATCH: MatchSettings = { mode: 'match', duration: 600, difficulty: 1 };
+const ball = (over: Partial<Ball> = {}): Ball => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ...over });
+const human = (s: MatchState) => s.players[s.controlled];
+const keeper = (s: MatchState, team: 'home' | 'away') => s.players.find((p) => p.team === team && p.gk)!;
+const types = (s: MatchState) => s.events.map((e) => e.type);
+
+function run(s: MatchState, seconds: number, input: InputFrame = NO_INPUT): void {
+  for (let i = 0; i < seconds / DT; i++) stepMatch(s, input);
+}
+
+/** Press a button for `hold` seconds, then release for one tick. */
+function press(s: MatchState, button: 'pass' | 'shoot' | 'lob', hold = 0.2, extra: Partial<InputFrame> = {}): void {
+  run(s, hold, { ...NO_INPUT, ...extra, [button]: true });
+  stepMatch(s, { ...NO_INPUT, ...extra });
+}
+
+/** Keeper out of the way, ball placed and struck. */
+function emptyGoalShot(s: MatchState, b: Partial<Ball>): void {
+  Object.assign(keeper(s, 'away'), { y: 5 });
+  Object.assign(keeper(s, 'away').gk!, { state: 'down', stateTimer: 99 });
+  Object.assign(human(s), { x: 10, y: 10 });
+  Object.assign(s.ball, ball(b));
+}
+
+/** Leaves only the given players on the pitch (the rest are sent off). */
+function only(s: MatchState, ...keep: Footballer[]): void {
+  for (const p of s.players) if (!keep.includes(p)) Object.assign(p, { sentOff: true, x: -20, y: -20 });
+  s.setPiece = null;
+}
+
+describe('ball physics', () => {
+  it('a 15 m/s ground pass rolls a realistic distance and stops', () => {
+    const b = ball({ vx: 15 });
+    let t = 0;
+    while (b.vx > 0 && t < 30) {
+      stepBall(b, DT);
+      t += DT;
+    }
+    expect(b.vx).toBe(0);
+    expect(b.x).toBeGreaterThan(25);
+    expect(b.x).toBeLessThan(35);
+  });
+
+  it('a lofted ball bounces several times, never goes underground, then rolls', () => {
+    const b = ball({ vx: 10, vz: 10 });
+    let bounces = 0;
+    let prevVz = b.vz;
+    for (let i = 0; i < 20 / DT; i++) {
+      stepBall(b, DT);
+      expect(b.z).toBeGreaterThanOrEqual(0);
+      if (prevVz < 0 && b.vz > 0) bounces++;
+      prevVz = b.vz;
+    }
+    expect(bounces).toBeGreaterThanOrEqual(2);
+    expect(b.z).toBe(0);
+    expect(b.vz).toBe(0);
+  });
+
+  it('predictCrossing agrees with stepping the ball', () => {
+    const b = ball({ x: 80, y: 30, vx: 20, vy: 2, vz: 4 });
+    const c = predictCrossing(b, 100, 3)!;
+    expect(c).not.toBeNull();
+    const copy = { ...b };
+    for (let t = 0; t < c.t - DT / 2; t += DT) stepBall(copy, DT);
+    expect(copy.x).toBeGreaterThanOrEqual(100);
+    expect(Math.abs(copy.y - c.y)).toBeLessThan(0.5);
+  });
+});
+
+describe('training: goals and restarts', () => {
+  it('a shot into an empty net scores and restarts from kickoff', () => {
+    const s = createMatch(1);
+    emptyGoalShot(s, { x: 95, y: CENTER.y, vx: 25 });
+    run(s, 1);
+    expect(s.score.home).toBe(1);
+    expect(types(s)).toContain('goal');
+    run(s, 3);
+    expect(s.phase).toBe('play');
+    expect(s.ball.x).toBeCloseTo(CENTER.x);
+  });
+
+  it('a shot over the bar is a goal kick to the keeper', () => {
+    const s = createMatch(1);
+    emptyGoalShot(s, { x: 100, y: CENTER.y, z: GOAL_HEIGHT + 1, vx: 20, vz: 2 });
+    run(s, 0.5);
+    expect(s.score.home).toBe(0);
+    expect(s.phase).toBe('out');
+    keeper(s, 'away').gk!.stateTimer = 0;
+    run(s, 1.1);
+    expect(keeper(s, 'away').gk!.state).toBe('holding');
+  });
+
+  it('hitting the post bounces the ball back into play', () => {
+    const s = createMatch(1);
+    emptyGoalShot(s, { x: 100, y: CENTER.y - 3.66, vx: 20 });
+    run(s, 0.4);
+    expect(types(s)).toContain('post');
+    expect(s.ball.x).toBeLessThan(PITCH_LENGTH);
+  });
+
+  it('the keeper stops a soft shot straight at him', () => {
+    const s = createMatch(1);
+    Object.assign(human(s), { x: 80, y: 10 });
+    Object.assign(s.ball, ball({ x: 90, y: CENTER.y, vx: 12 }));
+    run(s, 3);
+    expect(s.score.home).toBe(0);
+    expect(types(s).some((t) => t === 'save' || t === 'catch')).toBe(true);
+  });
+
+  it('keeper putting it wide is a corner, set at the corner spot', () => {
+    const s = createMatch(1);
+    emptyGoalShot(s, { x: 100, y: 20, vx: 15 });
+    s.lastTouch = 'away';
+    run(s, 2);
+    expect(s.setPiece).toMatchObject({ type: 'corner', team: 'home', x: PITCH_LENGTH - 0.5, y: 0.5 });
+  });
+
+  it('a dead ball cannot be dribbled, only kicked', () => {
+    const s = createMatch(1);
+    s.setPiece = { type: 'corner', team: 'home', x: 60, y: 30, takerId: s.controlled, timer: 0 };
+    Object.assign(s.ball, ball({ x: 60, y: 30 }));
+    Object.assign(human(s), { x: 57, y: 30 });
+    run(s, 1, { ...NO_INPUT, moveX: 1 });
+    expect(s.ball.x).toBe(60);
+    expect(s.possessor).toBe(-1);
+  });
+
+  it('a throw-in leaves from above the head and clears the set piece', () => {
+    const s = createMatch(1);
+    s.setPiece = { type: 'throw-in', team: 'home', x: 60, y: 0.05, takerId: s.controlled, timer: 0 };
+    Object.assign(s.ball, ball({ x: 60, y: 0.05 }));
+    Object.assign(human(s), { x: 60, y: 0.7, facingX: 0, facingY: 1 });
+    press(s, 'pass');
+    expect(s.setPiece).toBeNull();
+    expect(s.ball.z).toBeGreaterThan(1.8);
+    expect(s.ball.vy).toBeGreaterThan(5);
+  });
+});
+
+describe('player', () => {
+  it('runs onto the ball and keeps it while dribbling', () => {
+    const s = createMatch(1);
+    run(s, 2, { ...NO_INPUT, moveX: 1 });
+    expect(s.possessor).toBe(s.controlled);
+    expect(Math.hypot(s.ball.x - human(s).x, s.ball.y - human(s).y)).toBeLessThan(1.4);
+    expect(human(s).x).toBeGreaterThan(CENTER.x + 5);
+  });
+
+  it('a fully charged shot leaves the foot fast', () => {
+    const s = createMatch(1);
+    run(s, 0.5, { ...NO_INPUT, moveX: 1 });
+    press(s, 'shoot', 1, { moveX: 1 });
+    expect(Math.hypot(s.ball.vx, s.ball.vy)).toBeGreaterThan(25);
+    expect(s.possessor).toBe(-1);
+  });
+
+  it('pressing pass while charging a shot fakes it and keeps the ball', () => {
+    const s = createMatch(1);
+    run(s, 0.6, { ...NO_INPUT, moveX: 1 });
+    run(s, 0.3, { ...NO_INPUT, moveX: 1, shoot: true });
+    run(s, 0.1, { ...NO_INPUT, moveX: 1, shoot: true, pass: true });
+    expect(types(s)).toContain('fake');
+    expect(types(s)).not.toContain('kick');
+    expect(human(s).fakeAnim).toBeGreaterThan(0);
+    run(s, 0.3, { ...NO_INPUT, moveX: 1 });
+    expect(s.possessor).toBe(s.controlled);
+  });
+
+  it('an easy keeper usually bites on a fake shot close in', () => {
+    let bites = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const s = createMatch(seed, { mode: 'training', duration: 0, difficulty: 0 });
+      Object.assign(human(s), { x: 88, y: CENTER.y });
+      Object.assign(s.ball, ball({ x: 88.6, y: CENTER.y }));
+      run(s, 0.3, { ...NO_INPUT, moveX: 0.3 });
+      run(s, 0.2, { ...NO_INPUT, moveX: 0.3, shoot: true });
+      run(s, 0.05, { ...NO_INPUT, moveX: 0.3, shoot: true, pass: true });
+      if (keeper(s, 'away').gk!.state === 'diving') bites++;
+    }
+    expect(bites).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe('11 v 11', () => {
+  it('starts with 22 players and a home kickoff taken by the striker', () => {
+    const s = createMatch(1, MATCH);
+    expect(s.players).toHaveLength(22);
+    expect(s.setPiece).toMatchObject({ type: 'kickoff', team: 'home' });
+    expect(human(s).number).toBe(9);
+    expect(s.players.filter((p) => p.team === 'away').every((p) => p.x > CENTER.x)).toBe(true);
+  });
+
+  it('a pass goes to the teammate in the aim direction and control follows it', () => {
+    const s = createMatch(1, MATCH);
+    const passer = human(s);
+    const mate = s.players.find((p) => p.team === 'home' && p.number === 4)!;
+    const dx = mate.x - passer.x;
+    const dy = mate.y - passer.y;
+    const n = Math.hypot(dx, dy);
+    press(s, 'pass', 0.3, { moveX: dx / n, moveY: dy / n });
+    expect(s.passTarget).toBe(mate.id);
+    expect(s.controlled).toBe(mate.id);
+  });
+
+  it('pass assist prefers an outfield teammate over the keeper behind him', () => {
+    const s = createMatch(1, MATCH);
+    press(s, 'pass', 0.3, { moveX: -1 });
+    expect(s.players[s.passTarget]?.gk).toBeNull();
+  });
+
+  it('the CPU takes its own kickoff and plays on', () => {
+    const s = createMatch(3, MATCH);
+    s.score.home = 1;
+    s.phase = 'goal';
+    s.kickoffTeam = 'away';
+    s.phaseTimer = 0.01;
+    run(s, 3);
+    expect(s.setPiece).toBeNull();
+    expect(s.events.some((e) => e.type === 'kick' && e.team === 'away')).toBe(true);
+  });
+
+  it('a minute of CPU vs idle human stays sane: ball in bounds, players on the pitch, passes made', () => {
+    const s = createMatch(7, MATCH);
+    kickoff(s, 'away');
+    let kicks = 0;
+    for (let i = 0; i < 60 / DT; i++) {
+      stepMatch(s, NO_INPUT);
+      kicks += s.events.filter((e) => e.type === 'kick' && e.team === 'away').length;
+      s.events.length = 0;
+      expect(Number.isFinite(s.ball.x) && Number.isFinite(s.ball.y)).toBe(true);
+    }
+    expect(kicks).toBeGreaterThan(3);
+    for (const p of s.players.filter((q) => !q.sentOff)) {
+      expect(p.x).toBeGreaterThan(-4);
+      expect(p.x).toBeLessThan(PITCH_LENGTH + 4);
+      expect(p.y).toBeGreaterThan(-4);
+      expect(p.y).toBeLessThan(PITCH_WIDTH + 4);
+    }
+  });
+});
+
+describe('tackles, fouls and cards', () => {
+  /** Away carrier running at the home goal, the human right behind him. */
+  function chase(seed: number, carrierX = 60): { s: MatchState; carrier: Footballer; me: Footballer } {
+    const s = createMatch(seed, MATCH);
+    const carrier = s.players.find((p) => p.team === 'away' && p.number === 9)!;
+    const me = human(s);
+    only(s, carrier, me);
+    Object.assign(carrier, { x: carrierX, y: CENTER.y, vx: -5, vy: 0, facingX: -1, facingY: 0, think: 99 });
+    Object.assign(me, { x: carrierX + 1.6, y: CENTER.y, vx: -5, vy: 0, facingX: -1, facingY: 0 });
+    Object.assign(s.ball, ball({ x: carrierX - 0.7, y: CENTER.y, vx: -5 }));
+    s.possessor = carrier.id;
+    return { s, carrier, me };
+  }
+
+  it('a standing tackle from the front often wins the ball cleanly', () => {
+    let won = 0;
+    let fouls = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const s = createMatch(seed, MATCH);
+      const carrier = s.players.find((p) => p.team === 'away' && p.number === 9)!;
+      const me = human(s);
+      only(s, carrier, me);
+      Object.assign(carrier, { x: 60, y: CENTER.y, facingX: -1, facingY: 0, think: 99 });
+      Object.assign(me, { x: 59, y: CENTER.y, facingX: 1, facingY: 0 });
+      Object.assign(s.ball, ball({ x: 59.5, y: CENTER.y }));
+      s.possessor = carrier.id;
+      press(s, 'pass', DT);
+      if (types(s).includes('tackle')) won++;
+      if (types(s).includes('foul')) fouls++;
+    }
+    expect(won).toBeGreaterThanOrEqual(3);
+    expect(fouls).toBe(0);
+  });
+
+  it('a slide from behind that misses the ball is a foul, then a free kick', () => {
+    const { s, carrier } = chase(2);
+    press(s, 'shoot', DT, { moveX: -1 });
+    run(s, 0.5);
+    expect(s.phase).toBe('foul');
+    expect(s.foul).toMatchObject({ victimId: carrier.id, penalty: false });
+    expect(['yellow', 'red']).toContain(s.foul!.card);
+    run(s, FOUL_PAUSE + 0.1);
+    expect(s.setPiece).toMatchObject({ type: 'free-kick', team: 'away' });
+  });
+
+  it('a second yellow is a red and the player is sent off', () => {
+    const { s, me } = chase(4);
+    me.yellow = 1;
+    press(s, 'shoot', DT, { moveX: -1 });
+    run(s, 0.5);
+    expect(s.foul?.card).toBe('red');
+    run(s, FOUL_PAUSE + 0.1);
+    expect(me.sentOff).toBe(true);
+  });
+
+  it('a foul in the box is a penalty', () => {
+    const { s } = chase(5, 12);
+    press(s, 'shoot', DT, { moveX: -1 });
+    run(s, 0.5);
+    expect(s.foul?.penalty).toBe(true);
+    run(s, FOUL_PAUSE + 0.1);
+    expect(s.setPiece).toMatchObject({ type: 'penalty', team: 'away', x: PENALTY_SPOT, y: CENTER.y });
+  });
+});
+
+describe('match flow', () => {
+  it('match mode ends at full time', () => {
+    const s = createMatch(1, { mode: 'match', duration: 2, difficulty: 1 });
+    run(s, 2.5);
+    expect(s.phase).toBe('full-time');
+  });
+
+  it('training never ends', () => {
+    const s = createMatch(1);
+    run(s, 30);
+    expect(s.phase).not.toBe('full-time');
+  });
+
+  it('the referee follows play and stays on the pitch', () => {
+    const s = createMatch(1);
+    run(s, 6, { ...NO_INPUT, moveX: 1, moveY: 0.3, sprint: true });
+    const r = s.referee;
+    expect(r.x).toBeGreaterThan(0);
+    expect(r.x).toBeLessThan(PITCH_LENGTH);
+    expect(r.y).toBeGreaterThan(0);
+    expect(r.y).toBeLessThan(PITCH_WIDTH);
+    expect(Math.hypot(r.x - s.ball.x, r.y - s.ball.y)).toBeLessThan(30);
+  });
+});
+
+describe('determinism', () => {
+  it('same seed and inputs give an identical 11 v 11 match', () => {
+    const script = (s: MatchState) => {
+      run(s, 2, { ...NO_INPUT, moveX: 1, sprint: true });
+      press(s, 'pass', 0.3, { moveX: 1, moveY: -0.5 });
+      run(s, 8);
+    };
+    const a = createMatch(42, MATCH);
+    const b = createMatch(42, MATCH);
+    script(a);
+    script(b);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe('soak', () => {
+  it('five minutes of CPU vs CPU never stalls and produces football', () => {
+    const s = createMatch(11, { mode: 'match', duration: 9999, difficulty: 1, autoplay: true });
+    let still = 0;
+    let maxStill = 0;
+    const seen = new Set<string>();
+    for (let i = 0; i < 300 / DT; i++) {
+      stepMatch(s, NO_INPUT);
+      for (const e of s.events) seen.add(e.type);
+      s.events.length = 0;
+      const moving = Math.hypot(s.ball.vx, s.ball.vy) > 0.05;
+      const dead = !!s.setPiece || s.phase !== 'play' || s.players.some((p) => p.gk?.state === 'holding');
+      still = moving || dead ? 0 : still + DT;
+      maxStill = Math.max(maxStill, still);
+    }
+    expect(maxStill).toBeLessThan(5);
+    for (const t of ['kick', 'tackle', 'save']) expect(seen).toContain(t);
+  });
+});

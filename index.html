@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pixel Pitch</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #0d130d; overflow: hidden; }
+      body { font-family: 'Press Start 2P', monospace; color: #f4f4e8; }
+      #game { position: fixed; inset: 0; }
+      #game canvas { image-rendering: pixelated; }
+      #hud { position: fixed; top: 12px; left: 0; right: 0; text-align: center; pointer-events: none; }
+      #score { display: inline-block; background: rgba(0, 0, 0, 0.6); padding: 8px 14px; font-size: 14px; }
+      #msg { margin-top: 18px; font-size: 24px; white-space: pre-line; line-height: 34px; text-shadow: 3px 3px 0 #000; min-height: 32px; }
+      #clock { display: inline-block; background: rgba(0, 0, 0, 0.6); padding: 8px 10px; font-size: 14px; margin-left: 4px; color: #f4d35e; }
+      #clock:empty { display: none; }
+      #help { position: fixed; bottom: 10px; left: 0; right: 0; text-align: center; font-size: 9px; line-height: 16px; opacity: 0.75; pointer-events: none; }
+      #radar { position: fixed; top: 12px; right: 12px; width: 168px; height: 109px; opacity: 0.85; image-rendering: pixelated; }
+      #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(6, 12, 6, 0.62); }
+      #menu[hidden] { display: none; }
+      #menu .panel { text-align: center; padding: 28px 36px; background: rgba(0, 0, 0, 0.55); border: 3px solid #f4f4e8; box-shadow: 6px 6px 0 #000; }
+      #menu h1 { font-size: 30px; margin: 0 0 28px; color: #f4d35e; text-shadow: 4px 4px 0 #b23a2e, 7px 7px 0 #000; letter-spacing: 2px; }
+      #menu h2 { font-size: 20px; margin: 0 0 22px; text-shadow: 3px 3px 0 #000; }
+      #menu .result { font-size: 16px; margin: -6px 0 22px; color: #f4d35e; }
+      #menu ul { list-style: none; margin: 0; padding: 0; display: inline-block; text-align: left; }
+      #menu li { font-size: 14px; padding: 8px 12px 8px 30px; cursor: pointer; white-space: pre; position: relative; }
+      #menu li.on { color: #f4d35e; }
+      #menu li.on::before { content: '\25B6'; position: absolute; left: 6px; }
+      #menu li.opt.on::after { content: ' <>'; opacity: 0.6; }
+      #menu .hint { font-size: 8px; opacity: 0.6; margin: 22px 0 0; }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud" hidden><span id="score">HOME 0 - 0 CPU</span><span id="clock"></span><div id="msg"></div></div>
+    <canvas id="radar" width="210" height="136" hidden></canvas>
+    <div id="menu" hidden></div>
+    <div id="help" hidden>
+      Keyboard: Arrows move | S pass | D shoot | A lob | Shift sprint | Q switch | Esc pause<br />
+      Gamepad: left stick | RT sprint | A pass | B shoot | X lob | LB switch<br />
+      Hold to charge, release to kick | Other kick button while charging = fake | Defending: S tackle, D slide
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
