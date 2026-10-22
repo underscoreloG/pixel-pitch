@@ -344,11 +344,14 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     const n = Math.hypot(tx, ty) || 1;
     if (n > 0.3) locomote(p, tx / n, ty / n, input.sprint, false, dt);
   } else if (atDeadBall) {
+    // Lined up just behind the ball, always within kicking reach: the stick aims and he steps round it.
     const m = Math.hypot(input.moveX, input.moveY);
     if (m > 0.3) {
       p.facingX = input.moveX / m;
       p.facingY = input.moveY / m;
     }
+    p.x = s.ball.x - p.facingX * 0.6;
+    p.y = s.ball.y - p.facingY * 0.6;
     p.vx = p.vy = 0;
   } else if (canMove(p)) {
     locomote(p, input.moveX, input.moveY, input.sprint, s.possessor === p.id, dt);

@@ -344,6 +344,38 @@ describe('defending and assisted kicks', () => {
   });
 });
 
+describe('taking set pieces', () => {
+  /** Walk the human up to a dead ball the way a player would, then press pass. */
+  function walkUpAndPass(type: 'free-kick' | 'corner' | 'penalty', from: { x: number; y: number }, at: { x: number; y: number }) {
+    const s = createMatch(5, MATCH);
+    const me = human(s);
+    only(s, me);
+    Object.assign(me, from);
+    s.setPiece = { type, team: 'home', x: at.x, y: at.y, takerId: me.id, timer: 0.2 };
+    Object.assign(s.ball, ball(at));
+    for (let i = 0; i < 2 / DT; i++) {
+      const dx = s.ball.x - me.x;
+      const dy = s.ball.y - me.y;
+      const n = Math.hypot(dx, dy) || 1;
+      stepMatch(s, { ...NO_INPUT, moveX: dx / n, moveY: dy / n });
+    }
+    press(s, 'pass', 0.2, { moveX: 1 });
+    return s;
+  }
+
+  for (const [type, from, at] of [
+    ['free-kick', { x: 50, y: 30 }, { x: 55, y: 34 }],
+    ['corner', { x: 98, y: 8 }, { x: 104.5, y: 0.5 }],
+    ['penalty', { x: 92, y: 34 }, { x: 94, y: 34 }],
+  ] as const) {
+    it(`the human can walk up to a ${type} and take it`, () => {
+      const s = walkUpAndPass(type, from, at);
+      expect(s.setPiece).toBeNull();
+      expect(types(s)).toContain('kick');
+    });
+  }
+});
+
 describe('tackles, fouls and cards', () => {
   /** Away carrier running at the home goal, the human right behind him. */
   function chase(seed: number, carrierX = 60): { s: MatchState; carrier: Footballer; me: Footballer } {
