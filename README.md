@@ -2,6 +2,8 @@
 
 Browser football game: FIFA-style gameplay, pixel-art look. Red (you) vs Blue (CPU), 11 v 11.
 
+**Play it: https://underscorelog.github.io/pixel-pitch/**
+
 ![Kickoff, with the aim guide leading a pass into the winger's run](docs/screenshots/kickoff.png)
 
 | | |
@@ -30,6 +32,8 @@ npm run dev      # http://localhost:5180
 npm test         # simulation tests (physics, rules, AI soak test)
 npm run build    # typecheck + production bundle in dist/
 ```
+
+Every push to `main` runs the tests, builds and deploys to GitHub Pages (`.github/workflows/pages.yml`).
 
 `sprites.html` (dev server only) shows every generated sprite frame: `/sprites.html?kit=home&poses=jog,sprint&dirs=0,4,8,12`.
 
