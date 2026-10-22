@@ -1,8 +1,18 @@
 import { stepBall } from './ball';
-import { DT, KICK_COOLDOWN, PASS_ASSIST_CONE, PLAYER_JOG_SPEED, THROW_HEIGHT } from './constants';
+import {
+  CENTER,
+  DT,
+  GOAL_WIDTH,
+  GOAL_Y_MAX,
+  GOAL_Y_MIN,
+  KICK_COOLDOWN,
+  PASS_ASSIST_CONE,
+  PLAYER_JOG_SPEED,
+  THROW_HEIGHT,
+} from './constants';
 import { emit } from './events';
 import { random } from './rng';
-import { active, dist } from './team';
+import { active, clamp, dist, keeperOf, other, targetGoalX } from './team';
 import type { Ball, Footballer, KickType, MatchState, Vec2 } from './types';
 
 export interface KickPlan {
@@ -197,6 +207,104 @@ function lobCarry(speed: number, vz: number): number {
     if (b.z === 0 && b.vz >= 0 && i > 2) break;
   }
   return b.x;
+}
+
+export interface HumanKick {
+  power: number;
+  dirX: number;
+  dirY: number;
+  /** Intended receiver, -1 if none. */
+  target: number;
+  /** Scales the random aim error. */
+  errorMul: number;
+}
+
+/** Where the ball is kicked from: the set-piece spot for a dead ball. */
+function kickOrigin(s: MatchState): Vec2 {
+  return s.setPiece ? { x: s.setPiece.x, y: s.setPiece.y } : { x: s.ball.x, y: s.ball.y };
+}
+
+/**
+ * Turns the human's stick and charge into a kick. Assisted (default): passes
+ * go to the teammate in the stick direction with the right weight (charge only
+ * nudges it), shots aimed near the goal are pulled inside the posts, and random
+ * error is reduced. Manual: stick direction and charge, as they are.
+ */
+export function resolveHumanKick(
+  s: MatchState,
+  p: Footballer,
+  type: KickType,
+  charge: number,
+  moveX: number,
+  moveY: number,
+): HumanKick {
+  const m = Math.hypot(moveX, moveY);
+  const dirX = m < 0.3 ? p.facingX : moveX / m;
+  const dirY = m < 0.3 ? p.facingY : moveY / m;
+  if (s.settings.assist === false) return { power: charge, dirX, dirY, target: -1, errorMul: 1 };
+  if (type === 'shot' || s.setPiece?.type === 'penalty') return assistShot(s, p, charge, dirX, dirY, m < 0.3);
+
+  let aim = aimFor(s, p, type, moveX, moveY, charge);
+  if (aim.target < 0) return { power: charge, dirX: aim.dirX, dirY: aim.dirY, target: -1, errorMul: 0.8 };
+  const mate = s.players[aim.target];
+  const from = kickOrigin(s);
+  const throwIn = s.setPiece?.type === 'throw-in';
+  let ideal = charge;
+  // The lead point depends on ball speed and the speed on the distance: two rounds settle it.
+  for (let i = 0; i < 2; i++) {
+    const speed = throwIn ? 6 + 10 * ideal : type === 'lob' ? 8 + 12 * ideal : 7 + 15 * ideal;
+    const d = dist(from, leadPoint(p, mate, speed));
+    ideal = throwIn ? throwPowerFor(d) : type === 'lob' ? lobPowerFor(d) : passPowerFor(d);
+    aim = aimFor(s, p, type, moveX, moveY, ideal);
+  }
+  return {
+    // Charge only nudges the weight: a tap is 92% of ideal, a full bar 108%.
+    power: clamp(ideal * (0.92 + 0.16 * charge), 0.05, 1),
+    dirX: aim.dirX,
+    dirY: aim.dirY,
+    target: aim.target,
+    errorMul: 0.5,
+  };
+}
+
+/** Shots roughly at goal are aimed at a point inside the posts; no stick means the far corner. */
+function assistShot(s: MatchState, p: Footballer, charge: number, dx: number, dy: number, neutral: boolean): HumanKick {
+  const from = kickOrigin(s);
+  const goalX = targetGoalX(p.team);
+  const gx = goalX - from.x;
+  const gy = CENTER.y - from.y;
+  const dG = Math.hypot(gx, gy) || 1;
+  const towardGoal = (dx * gx + dy * gy) / dG > Math.cos(0.7);
+  if (dG > 38 || (!towardGoal && !neutral)) return { power: charge, dirX: dx, dirY: dy, target: -1, errorMul: 1 };
+  let ty: number;
+  if (neutral) {
+    const keeper = keeperOf(s, other(p.team));
+    const side = keeper && keeper.y > CENTER.y ? -1 : 1;
+    ty = CENTER.y + side * (GOAL_WIDTH / 2 - 0.7);
+  } else {
+    // Where the stick line meets the goal line, pulled inside the posts.
+    const k = Math.abs(dx) > 0.05 ? gx / dx : -1;
+    ty = k > 0 ? from.y + dy * k : CENTER.y;
+  }
+  ty = clamp(ty, GOAL_Y_MIN + 0.6, GOAL_Y_MAX - 0.6);
+  const ax = goalX - from.x;
+  const ay = ty - from.y;
+  const n = Math.hypot(ax, ay) || 1;
+  return { power: charge, dirX: ax / n, dirY: ay / n, target: -1, errorMul: 0.6 };
+}
+
+/** Throw-in power that lands about 90% of the way (it bounces on to the receiver). */
+function throwPowerFor(distance: number): number {
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 10; i++) {
+    const mid = (lo + hi) / 2;
+    const b: Ball = { x: 0, y: 0, z: THROW_HEIGHT, vx: 6 + 10 * mid, vy: 0, vz: 1.5 + 2 * mid };
+    for (let j = 0; j < 300 && !(b.z === 0 && b.vz >= 0 && j > 2); j++) stepBall(b, DT);
+    if (b.x < distance * 0.9) lo = mid;
+    else hi = mid;
+  }
+  return hi;
 }
 
 export function isSprinting(p: Footballer, sprintHeld: boolean): boolean {

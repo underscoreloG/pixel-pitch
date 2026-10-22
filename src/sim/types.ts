@@ -121,6 +121,8 @@ export interface MatchSettings {
   difficulty: 0 | 1 | 2;
   /** CPU controls the home side too (menu backdrop demo, soak tests). */
   autoplay?: boolean;
+  /** Assisted kicks for the human (default on): pass weight, shot aim, less random error. */
+  assist?: boolean;
 }
 
 export type MatchEventType =

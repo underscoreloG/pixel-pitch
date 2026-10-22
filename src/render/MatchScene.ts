@@ -13,7 +13,7 @@ import {
   PITCH_LENGTH,
   PITCH_WIDTH,
 } from '../sim/constants';
-import { aimFor, isSprinting, planKick } from '../sim/kick';
+import { isSprinting, planKick, resolveHumanKick } from '../sim/kick';
 import { NO_INPUT, createMatch, stepMatch } from '../sim/match';
 import { attackDir } from '../sim/team';
 import type { Ball, Footballer, InputFrame, KickType, MatchEvent, MatchSettings, MatchState, Team } from '../sim/types';
@@ -202,6 +202,7 @@ export class MatchScene extends Phaser.Scene {
       duration: kind === 'demo' ? 1e9 : this.settings.matchMinutes * 60,
       difficulty: this.settings.difficulty,
       autoplay: kind === 'demo',
+      assist: this.settings.assist,
     };
     this.state = createMatch(Date.now() >>> 0, settings);
     this.prev = snapshot(this.state);
@@ -428,8 +429,9 @@ export class MatchScene extends Phaser.Scene {
     if (Math.hypot(startX - p.x, startY - p.y) > KICK_RADIUS + 0.8) return;
     const input = this.lastInput;
     const power = Math.max(MIN_KICK_POWER, p.charge);
-    const aim = aimFor(s, p, type, input.moveX, input.moveY, power);
-    const plan = planKick(s, p, type, power, aim.dirX, aim.dirY, isSprinting(p, input.sprint));
+    // Same resolution as the real kick, so the guide shows the assisted result.
+    const aim = resolveHumanKick(s, p, type, power, input.moveX, input.moveY);
+    const plan = planKick(s, p, type, aim.power, aim.dirX, aim.dirY, isSprinting(p, input.sprint));
     const b: Ball = { x: startX, y: startY, z: plan.z, vx: plan.vx, vy: plan.vy, vz: plan.vz };
     const color = POWER_COLORS[type];
     let crossedGoalLine = false;
@@ -449,7 +451,7 @@ export class MatchScene extends Phaser.Scene {
       }
     }
     const travel = Math.hypot(b.x - startX, b.y - startY);
-    const r = Math.max(0.6, travel * Math.tan((plan.errorDeg * Math.PI) / 180));
+    const r = Math.max(0.6, travel * Math.tan((plan.errorDeg * aim.errorMul * Math.PI) / 180));
     g.fillStyle(color, 0.9);
     if (crossedGoalLine) {
       // Where it crosses the goal line, at height.

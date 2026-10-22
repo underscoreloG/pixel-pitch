@@ -1,8 +1,11 @@
 import {
+  AI_LEVELS,
   CHARGE_TIME,
   DRIBBLE_SPEED_FACTOR,
   DRIBBLE_STIFFNESS,
   GAIN_CONTROL_RADIUS,
+  HUMAN_BODY_STEAL,
+  HUMAN_TACKLE_REACH,
   HUMAN_TACKLE_SUCCESS,
   KEEP_CONTROL_RADIUS,
   KICK_BUFFER_TIME,
@@ -20,13 +23,12 @@ import {
   PLAYER_RADIUS,
   PLAYER_SPRINT_SPEED,
   SLIDE_RANGE,
-  TACKLE_RANGE,
 } from './constants';
 import { emit } from './events';
-import { aimFor, isSprinting, kickBall } from './kick';
-import { randomRange } from './rng';
+import { isSprinting, kickBall, resolveHumanKick } from './kick';
+import { random, randomRange } from './rng';
 import { active, byId, clamp, dist } from './team';
-import { standingTackle, startSlide } from './tackle';
+import { fromBehind, standingTackle, startSlide } from './tackle';
 import type { Buttons, Footballer, InputFrame, KickType, MatchState, Role, Team } from './types';
 
 const BUTTON_FOR: Record<KickType, keyof Buttons> = { pass: 'pass', shot: 'shoot', lob: 'lob' };
@@ -197,6 +199,8 @@ export function resolvePossession(s: MatchState): void {
     }
   }
 
+  if (carrier && s.phase === 'play') carrier = bodySteal(s, carrier);
+
   const prev = s.possessor;
   s.possessor = carrier ? carrier.id : -1;
   if (carrier) {
@@ -204,7 +208,8 @@ export function resolvePossession(s: MatchState): void {
       s.lastTouch = carrier.team;
       s.lastToucherId = carrier.id;
       s.passTarget = -1;
-      if (carrier.team === 'home' && s.players[s.controlled]?.team === 'home') s.controlled = carrier.id;
+      if (carrier.team === 'home') s.controlled = carrier.id;
+      else autoSwitch(s);
     }
     const lead = 0.45 + 0.07 * Math.hypot(carrier.vx, carrier.vy);
     const tx = carrier.x + carrier.facingX * lead;
@@ -230,6 +235,32 @@ export function resolvePossession(s: MatchState): void {
     emit(s, 'block', { team: p.team, playerId: p.id, power: 0.6 });
     break;
   }
+}
+
+/**
+ * A defender who gets his body onto the dribbled ball can take it: likely for
+ * the human (that's the point of closing down), occasionally for the CPU.
+ */
+function bodySteal(s: MatchState, carrier: Footballer): Footballer {
+  for (const o of active(s)) {
+    const human = o.id === s.controlled && !s.settings.autoplay;
+    if (o.team === carrier.team || o.gk || !canControl(o) || dist(o, s.ball) > (human ? 0.65 : 0.55)) continue;
+    const chance = human ? HUMAN_BODY_STEAL : AI_LEVELS[s.settings.difficulty].steal;
+    if (random(s.rng) >= chance) continue;
+    carrier.kickCooldown = 0.4;
+    emit(s, 'tackle', { team: o.team, playerId: o.id, power: 0.4 });
+    return o;
+  }
+  return carrier;
+}
+
+/** When blue wins the ball, hand control to the red player best placed to win it back. */
+function autoSwitch(s: MatchState): void {
+  if (s.settings.autoplay) return;
+  const current = byId(s, s.controlled);
+  const nearest = nearestHome(s);
+  if (!nearest || !current || nearest.id === current.id) return;
+  if (dist(nearest, s.ball) + 3 < dist(current, s.ball)) s.controlled = nearest.id;
 }
 
 /**
@@ -282,9 +313,37 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
   }
   s.controlled = p.id;
 
+  const carrier = byId(s, s.possessor);
+  const defending = !!carrier && carrier.team !== p.team && s.phase === 'play' && canMove(p);
+  // Hold pass while defending to close the carrier down: the player runs at the ball by himself,
+  // and keeps after it if a tackle knocks it loose nearby.
+  const looseNearby = !carrier && s.phase === 'play' && !s.setPiece && dist(p, s.ball) < 6 && canMove(p);
+  const pressing = (defending || looseNearby) && buttons.pass && !p.charging;
+
   // A set-piece taker at the ball is locked in place: the stick only aims.
   const atDeadBall = s.setPiece?.takerId === p.id && dist(p, s.ball) < 1.2;
-  if (atDeadBall) {
+  // From behind, run round to get goal-side of the carrier; otherwise go straight at the ball.
+  const behind = !!carrier && defending && fromBehind(p, carrier);
+  if (pressing) {
+    let aimX = s.ball.x + s.ball.vx * 0.15;
+    let aimY = s.ball.y + s.ball.vy * 0.15;
+    if (behind && carrier) {
+      // Come round on whichever side he is already on, ahead of the carrier, not through his back.
+      const side = Math.sign((p.x - carrier.x) * -carrier.facingY + (p.y - carrier.y) * carrier.facingX) || 1;
+      aimX = carrier.x + carrier.facingX * 1.2 - carrier.facingY * side * 1.1;
+      aimY = carrier.y + carrier.facingY * 1.2 + carrier.facingX * side * 1.1;
+    }
+    const tx = aimX - p.x;
+    const ty = aimY - p.y;
+    const n = Math.hypot(tx, ty) || 1;
+    locomote(p, tx / n, ty / n, input.sprint, false, dt);
+  } else if (s.passTarget === p.id && !carrier && Math.hypot(input.moveX, input.moveY) < 0.2 && canMove(p)) {
+    // Receiving a pass with the stick untouched: run onto the ball.
+    const tx = s.ball.x + s.ball.vx * 0.3 - p.x;
+    const ty = s.ball.y + s.ball.vy * 0.3 - p.y;
+    const n = Math.hypot(tx, ty) || 1;
+    if (n > 0.3) locomote(p, tx / n, ty / n, input.sprint, false, dt);
+  } else if (atDeadBall) {
     const m = Math.hypot(input.moveX, input.moveY);
     if (m > 0.3) {
       p.facingX = input.moveX / m;
@@ -295,12 +354,11 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     locomote(p, input.moveX, input.moveY, input.sprint, s.possessor === p.id, dt);
   }
 
-  const carrier = byId(s, s.possessor);
-  const defending = !!carrier && carrier.team !== p.team && s.phase === 'play' && canMove(p);
   if (defending && !p.charging && carrier) {
     const d = dist(p, carrier);
-    if (pressed('pass') && p.tackleCooldown === 0 && d < TACKLE_RANGE * 1.4) {
-      standingTackle(s, p, carrier, HUMAN_TACKLE_SUCCESS);
+    // Holding only tackles from a fair angle; a fresh press tackles from anywhere (your risk).
+    if (buttons.pass && p.tackleCooldown === 0 && d < HUMAN_TACKLE_REACH && (pressed('pass') || !behind)) {
+      standingTackle(s, p, carrier, HUMAN_TACKLE_SUCCESS, HUMAN_TACKLE_REACH);
     } else if (pressed('shoot') && p.tackleCooldown === 0 && d < SLIDE_RANGE) {
       startSlide(s, p, s.ball.x - p.x, s.ball.y - p.y);
     }
@@ -312,10 +370,14 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
   if (p.pending) {
     if (canKickNow(s, p)) {
       const sprint = isSprinting(p, input.sprint);
-      const aim = aimFor(s, p, p.pending.type, input.moveX, input.moveY, p.pending.power);
-      kickBall(s, p, p.pending.type, p.pending.power, aim.dirX, aim.dirY, { sprinting: sprint, target: aim.target });
+      const k = resolveHumanKick(s, p, p.pending.type, p.pending.power, input.moveX, input.moveY);
+      kickBall(s, p, p.pending.type, k.power, k.dirX, k.dirY, {
+        sprinting: sprint,
+        errorMul: k.errorMul,
+        target: k.target,
+      });
       // Control follows the pass, FIFA style.
-      if (aim.target >= 0) s.controlled = aim.target;
+      if (k.target >= 0) s.controlled = k.target;
       return;
     }
     p.pending.ttl -= dt;

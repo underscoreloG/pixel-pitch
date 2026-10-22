@@ -235,13 +235,112 @@ describe('11 v 11', () => {
       s.events.length = 0;
       expect(Number.isFinite(s.ball.x) && Number.isFinite(s.ball.y)).toBe(true);
     }
-    expect(kicks).toBeGreaterThan(3);
+    // The idle human eventually owns a restart and play waits for him; before that the CPU must be playing.
+    expect(kicks).toBeGreaterThanOrEqual(3);
     for (const p of s.players.filter((q) => !q.sentOff)) {
       expect(p.x).toBeGreaterThan(-4);
       expect(p.x).toBeLessThan(PITCH_LENGTH + 4);
       expect(p.y).toBeGreaterThan(-4);
       expect(p.y).toBeLessThan(PITCH_WIDTH + 4);
     }
+  });
+});
+
+describe('defending and assisted kicks', () => {
+  /** Away carrier dribbling towards the home goal, the human in front of him. */
+  function faceUp(seed: number, gap: number): { s: MatchState; carrier: Footballer; me: Footballer } {
+    const s = createMatch(seed, MATCH);
+    const carrier = s.players.find((p) => p.team === 'away' && p.number === 9)!;
+    const me = human(s);
+    only(s, carrier, me);
+    Object.assign(carrier, { x: 60, y: CENTER.y, facingX: -1, facingY: 0, think: 99 });
+    Object.assign(me, { x: 60 - gap, y: CENTER.y + 2, facingX: 1, facingY: 0 });
+    Object.assign(s.ball, ball({ x: 59.4, y: CENTER.y }));
+    s.possessor = carrier.id;
+    return { s, carrier, me };
+  }
+
+  it('holding S runs at the carrier and usually wins the ball', () => {
+    let won = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const { s, me } = faceUp(seed, 8);
+      let gotIt = false;
+      for (let i = 0; i < 3 / DT && !gotIt; i++) {
+        stepMatch(s, { ...NO_INPUT, pass: true, sprint: true });
+        gotIt = s.possessor === me.id;
+      }
+      if (gotIt) won++;
+    }
+    expect(won).toBeGreaterThanOrEqual(6);
+  });
+
+  it('a defender who gets onto the dribbled ball sometimes takes it without pressing anything', () => {
+    let won = 0;
+    for (let seed = 1; seed <= 10; seed++) {
+      const { s, me } = faceUp(seed, 1.5);
+      Object.assign(me, { x: 59.0, y: CENTER.y });
+      // Steer at the ball, no button.
+      for (let i = 0; i < 45; i++) {
+        const dx = s.ball.x - me.x;
+        const dy = s.ball.y - me.y;
+        const n = Math.hypot(dx, dy) || 1;
+        stepMatch(s, { ...NO_INPUT, moveX: dx / n, moveY: dy / n });
+      }
+      if (s.possessor === me.id) won++;
+    }
+    expect(won).toBeGreaterThanOrEqual(3);
+  });
+
+  it('control switches to the nearest red player when blue wins the ball', () => {
+    const s = createMatch(1, MATCH);
+    const blue = s.players.find((p) => p.team === 'away' && p.number === 8)!;
+    const near = s.players.find((p) => p.team === 'home' && p.number === 6)!;
+    s.setPiece = null;
+    Object.assign(blue, { x: near.x + 3, y: near.y, think: 99 });
+    Object.assign(s.ball, ball({ x: near.x + 2.5, y: near.y }));
+    run(s, 0.1);
+    expect(s.possessor).toBe(blue.id);
+    expect(s.controlled).toBe(near.id);
+  });
+
+  it('an assisted pass is weighted to reach the teammate', () => {
+    const s = createMatch(2, MATCH);
+    const mate = s.players.find((p) => p.team === 'home' && p.number === 4)!;
+    const me = human(s);
+    only(s, me, mate);
+    Object.assign(me, { x: 50, y: 34, facingX: -1, facingY: 0 });
+    Object.assign(mate, { x: 30, y: 30 });
+    Object.assign(s.ball, ball({ x: 49.5, y: 34 }));
+    run(s, 0.2, { ...NO_INPUT, moveX: -1 });
+    press(s, 'pass', DT, { moveX: -1, moveY: -0.2 });
+    run(s, 4);
+    expect(s.possessor).toBe(mate.id);
+  });
+
+  it('an assisted shot aimed just wide is pulled inside the post; manual stays wide', () => {
+    const shootFrom = (assist: boolean) => {
+      const s = createMatch(3, { ...MATCH, assist });
+      const me = human(s);
+      only(s, me);
+      Object.assign(me, { x: 88, y: 34, facingX: 1, facingY: 0 });
+      Object.assign(s.ball, ball({ x: 88.6, y: 34 }));
+      s.possessor = me.id;
+      // Aim at a point 2 m outside the far post.
+      const dx = 105 - 88.6;
+      const dy = 34 + 3.66 + 2 - 34;
+      const n = Math.hypot(dx, dy);
+      press(s, 'shoot', 0.3, { moveX: dx / n, moveY: dy / n });
+      let crossY = NaN;
+      for (let i = 0; i < 120 && Number.isNaN(crossY); i++) {
+        const prevX = s.ball.x;
+        stepMatch(s, NO_INPUT);
+        if (prevX < 105 && s.ball.x >= 105) crossY = s.ball.y;
+        if (s.phase === 'goal') crossY = s.ball.y;
+      }
+      return crossY;
+    };
+    expect(Math.abs(shootFrom(true) - 34)).toBeLessThan(3.66);
+    expect(Math.abs(shootFrom(false) - 34)).toBeGreaterThan(3.66);
   });
 });
 

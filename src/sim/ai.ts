@@ -126,8 +126,12 @@ function decide(s: MatchState, p: Footballer, info: TickInfo): Target {
   const carrier = byId(s, s.possessor);
   if (carrier?.id === p.id) return carry(s, p);
 
-  // Receiver of a pass, or first to a loose ball: go and get it.
-  if (s.passTarget === p.id || (!carrier && info.chaser[p.team] === p.id && !keeperHolding(s))) {
+  // Receiver of a pass, or first to a loose ball (unless it's a pass to a teammate): go and get it.
+  const passToMate = s.passTarget >= 0 && s.players[s.passTarget].team === p.team;
+  if (
+    s.passTarget === p.id ||
+    (!carrier && !passToMate && info.chaser[p.team] === p.id && !keeperHolding(s))
+  ) {
     return { ...interceptPoint(p, info.path), sprint: true };
   }
 
@@ -228,20 +232,22 @@ function carry(s: MatchState, p: Footballer): Target {
     }
   }
 
-  // Dribble at goal, bending away from opponents in front.
-  let dx = (goal.x - p.x) / toGoal;
-  let dy = (goal.y - p.y) / toGoal;
+  // Dribble at goal, sidestepping opponents in front (never turning back on them).
+  const fx = (goal.x - p.x) / toGoal;
+  const fy = (goal.y - p.y) / toGoal;
+  let dx = fx;
+  let dy = fy;
   let space = true;
   for (const o of opps) {
     const ox = p.x - o.x;
     const oy = p.y - o.y;
     const od = Math.hypot(ox, oy);
-    if (od > 7) continue;
-    const inFront = -(ox * dx + oy * dy) > 0;
-    if (!inFront) continue;
+    if (od > 7 || -(ox * fx + oy * fy) <= 0) continue;
     if (od < 4) space = false;
-    dx += (ox / (od * od)) * 4;
-    dy += (oy / (od * od)) * 4;
+    // Perpendicular to the run, on the side away from the defender.
+    const side = Math.sign(ox * -fy + oy * fx) || 1;
+    dx += -fy * side * (2.5 / od);
+    dy += fx * side * (2.5 / od);
   }
   const n = Math.hypot(dx, dy) || 1;
   // Stay on the pitch.

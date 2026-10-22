@@ -87,7 +87,11 @@ export const PLAYER_RADIUS = 0.35;
 export const TACKLE_RANGE = 1.1;
 export const TACKLE_COOLDOWN = 0.8;
 export const TACKLE_ANIM = 0.35;
-export const HUMAN_TACKLE_SUCCESS = 0.5;
+export const HUMAN_TACKLE_SUCCESS = 0.65;
+/** The human's standing tackle lunges further than the CPU's. */
+export const HUMAN_TACKLE_REACH = 1.6;
+/** Per-tick chance a defender standing on the dribbled ball wins it (human; CPU per difficulty below). */
+export const HUMAN_BODY_STEAL = 0.08;
 export const SLIDE_RANGE = 3.5;
 export const SLIDE_SPEED = 9.5;
 export const SLIDE_TIME = 0.55;
@@ -99,9 +103,9 @@ export const FREE_KICK_DISTANCE = 9.15;
 export const SET_PIECE_DELAY = 0.9;
 /** Pass assist picks a teammate within this angle (radians) of the aim. */
 export const PASS_ASSIST_CONE = 0.6;
-/** CPU decision interval (s), tackle success, kick error multiplier, speed factor per difficulty. */
+/** CPU decision interval (s), tackle success, kick error multiplier, speed factor, body-steal chance per difficulty. */
 export const AI_LEVELS = [
-  { decision: 0.35, tackle: 0.25, accuracy: 1.6, speed: 0.92 },
-  { decision: 0.22, tackle: 0.35, accuracy: 1.2, speed: 0.96 },
-  { decision: 0.15, tackle: 0.45, accuracy: 1.0, speed: 1.0 },
+  { decision: 0.35, tackle: 0.25, accuracy: 1.6, speed: 0.92, steal: 0.004 },
+  { decision: 0.22, tackle: 0.35, accuracy: 1.2, speed: 0.96, steal: 0.008 },
+  { decision: 0.15, tackle: 0.45, accuracy: 1.0, speed: 1.0, steal: 0.012 },
 ] as const;

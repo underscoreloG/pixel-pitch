@@ -43,14 +43,16 @@ Every push to `main` runs the tests, builds and deploys to GitHub Pages (`.githu
 |---|---|---|
 | Move | Arrows | Left stick |
 | Sprint | Shift | RT |
-| Pass / standing tackle | S | A |
+| Pass / hold to press and tackle | S | A |
 | Shoot / slide tackle | D | B |
 | Lob | A | X |
 | Switch player | Q | LB |
 | Pause | Esc | |
 
 Hold a kick button to charge, release to kick. Press another kick button while charging to fake.
-Passes and lobs snap to the teammate in the stick direction; control follows the pass.
+Passes and lobs snap to the teammate in the stick direction with the right weight; control follows the pass.
+Shots aimed near the goal are pulled inside the posts (Options > KICKS: MANUAL turns the assistance off).
+Defending: hold S to run at the ball carrier and tackle when in range; getting your body on the ball can win it too.
 
 ## How it's built
 

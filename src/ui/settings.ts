@@ -9,6 +9,8 @@ export interface Settings {
   matchMinutes: 3 | 5 | 8;
   difficulty: 0 | 1 | 2;
   aimGuide: boolean;
+  /** Assisted pass weight and shot aim. */
+  assist: boolean;
   /** How much of the pitch the camera shows. */
   camera: 'close' | 'normal' | 'wide';
   showHelp: boolean;
@@ -22,6 +24,7 @@ export const DEFAULTS: Settings = {
   matchMinutes: 5,
   difficulty: 1,
   aimGuide: true,
+  assist: true,
   camera: 'normal',
   showHelp: true,
 };

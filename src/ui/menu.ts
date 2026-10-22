@@ -99,6 +99,7 @@ export class Menu {
             change: (d) => set('difficulty', ((s.difficulty + d + 3) % 3) as Settings['difficulty']),
           },
           { label: () => `AIM GUIDE  ${s.aimGuide ? 'ON' : 'OFF'}`, change: () => set('aimGuide', !s.aimGuide) },
+          { label: () => `KICKS      ${s.assist ? 'ASSISTED' : 'MANUAL'}`, change: () => set('assist', !s.assist) },
           {
             label: () => `CAMERA     ${s.camera.toUpperCase()}`,
             change: (d) => set('camera', cycle(CAMERAS, s.camera, d)),

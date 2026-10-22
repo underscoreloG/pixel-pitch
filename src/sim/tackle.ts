@@ -15,7 +15,7 @@ import { active, byId, dist, inPenaltyArea, other, ownGoalX, teamU } from './tea
 import type { Card, Footballer, MatchState } from './types';
 
 /** True if `tackler` comes in from behind the player he is challenging. */
-function fromBehind(tackler: Footballer, victim: Footballer): boolean {
+export function fromBehind(tackler: Footballer, victim: Footballer): boolean {
   const dx = tackler.x - victim.x;
   const dy = tackler.y - victim.y;
   const d = Math.hypot(dx, dy) || 1;
@@ -26,7 +26,13 @@ function fromBehind(tackler: Footballer, victim: Footballer): boolean {
  * Standing tackle on the carrier. Clean tackles poke the ball loose; a failed
  * one from behind can trip the carrier, which is a foul.
  */
-export function standingTackle(s: MatchState, tackler: Footballer, carrier: Footballer, success: number): void {
+export function standingTackle(
+  s: MatchState,
+  tackler: Footballer,
+  carrier: Footballer,
+  success: number,
+  reach = TACKLE_RANGE,
+): void {
   tackler.tackleCooldown = TACKLE_COOLDOWN;
   tackler.tackleAnim = TACKLE_ANIM;
   const dx = carrier.x - tackler.x;
@@ -34,22 +40,36 @@ export function standingTackle(s: MatchState, tackler: Footballer, carrier: Foot
   const d = Math.hypot(dx, dy) || 1;
   tackler.facingX = dx / d;
   tackler.facingY = dy / d;
-  if (d > TACKLE_RANGE || s.possessor !== carrier.id) return;
+  // Lunge in.
+  tackler.vx += tackler.facingX * 3;
+  tackler.vy += tackler.facingY * 3;
+  if (d > reach || s.possessor !== carrier.id) return;
 
   const behind = fromBehind(tackler, carrier);
   const fast = Math.hypot(carrier.vx, carrier.vy) > 7;
   const chance = success * (behind ? 0.5 : 1) * (fast ? 0.8 : 1);
   if (random(s.rng) < chance) {
     const ball = s.ball;
-    const bx = ball.x - tackler.x;
-    const by = ball.y - tackler.y;
-    const bd = Math.hypot(bx, by) || 1;
-    const speed = randomRange(s.rng, 3, 6);
-    ball.vx = (bx / bd) * speed + tackler.vx * 0.3;
-    ball.vy = (by / bd) * speed + tackler.vy * 0.3;
-    ball.vz = 0;
-    s.possessor = -1;
-    carrier.kickCooldown = 0.35;
+    carrier.kickCooldown = 0.6;
+    if (random(s.rng) < 0.6) {
+      // Block tackle: the ball stays with the tackler.
+      ball.x = tackler.x + tackler.facingX * 0.5;
+      ball.y = tackler.y + tackler.facingY * 0.5;
+      ball.vx = tackler.vx;
+      ball.vy = tackler.vy;
+      ball.vz = 0;
+      s.possessor = tackler.id;
+    } else {
+      // Poked loose.
+      const bx = ball.x - tackler.x;
+      const by = ball.y - tackler.y;
+      const bd = Math.hypot(bx, by) || 1;
+      const speed = randomRange(s.rng, 3, 6);
+      ball.vx = (bx / bd) * speed + tackler.vx * 0.3;
+      ball.vy = (by / bd) * speed + tackler.vy * 0.3;
+      ball.vz = 0;
+      s.possessor = -1;
+    }
     s.lastTouch = tackler.team;
     s.lastToucherId = tackler.id;
     emit(s, 'tackle', { team: tackler.team, playerId: tackler.id });
