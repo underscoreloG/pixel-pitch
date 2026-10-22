@@ -212,6 +212,7 @@ export class Menu {
       this.screen === 'options'
         ? 'LEFT/RIGHT CHANGE | ESC BACK'
         : 'ARROWS MOVE | ENTER SELECT' + (this.screen === 'pause' ? ' | ESC RESUME' : '');
-    this.root.innerHTML = `<div class="panel">${heading}<ul>${list}</ul><p class="hint">${hint}</p></div>`;
+    const version = this.screen === 'main' ? `<p class="version">v${__APP_VERSION__}</p>` : '';
+    this.root.innerHTML = `<div class="panel">${heading}<ul>${list}</ul><p class="hint">${hint}</p>${version}</div>`;
   }
 }
