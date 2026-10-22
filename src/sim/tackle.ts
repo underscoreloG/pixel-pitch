@@ -47,7 +47,7 @@ export function standingTackle(
 
   const behind = fromBehind(tackler, carrier);
   const fast = Math.hypot(carrier.vx, carrier.vy) > 7;
-  const chance = success * (behind ? 0.5 : 1) * (fast ? 0.8 : 1);
+  const chance = success * tackler.ratings.tackling * (behind ? 0.5 : 1) * (fast ? 0.8 : 1);
   if (random(s.rng) < chance) {
     const ball = s.ball;
     carrier.kickCooldown = 0.6;

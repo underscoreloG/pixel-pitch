@@ -1,3 +1,5 @@
+import type { MatchStats } from './stats';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -54,6 +56,14 @@ export type Role = 'GK' | 'DF' | 'MF' | 'FW';
 
 export type KeeperState = 'positioning' | 'diving' | 'down' | 'holding';
 
+/** Ability multipliers around 1. */
+export interface Ratings {
+  pace: number;
+  shooting: number;
+  passing: number;
+  tackling: number;
+}
+
 export interface KeeperBrain {
   state: KeeperState;
   stateTimer: number;
@@ -62,6 +72,8 @@ export interface KeeperBrain {
   diveDir: number;
   /** Waiting for a penalty to be struck: he will pick a side as it is. */
   facingPenalty: boolean;
+  /** Holding the ball for a goal kick: it goes long. */
+  goalKick: boolean;
 }
 
 export interface Footballer {
@@ -86,6 +98,8 @@ export interface Footballer {
   throwAnim: number;
   fakeAnim: number;
   lastFakeTick: number;
+  /** Seconds left in the air after a header. */
+  jump: number;
   // Defending
   tackleCooldown: number;
   tackleAnim: number;
@@ -96,6 +110,9 @@ export interface Footballer {
   down: number;
   yellow: number;
   sentOff: boolean;
+  /** 1 fresh .. 0.2 spent; a tired player is a little slower. */
+  stamina: number;
+  ratings: Ratings;
   gk: KeeperBrain | null;
   /** CPU brain timer: next decision when it reaches 0. */
   think: number;
@@ -134,6 +151,24 @@ export interface MatchSettings {
   autoplay?: boolean;
   /** Assisted kicks for the human (default on): pass weight, shot aim, less random error. */
   assist?: boolean;
+  /** Offside is called (default on). */
+  offside?: boolean;
+  /** A drawn match: stays drawn (default), goes to extra time (then penalties), or straight to penalties. */
+  ifDrawn?: 'final' | 'extra-time' | 'penalties';
+}
+
+export type ShootoutOutcome = 'goal' | 'saved' | 'missed';
+
+export interface Shootout {
+  goals: Record<Team, number>;
+  taken: Record<Team, number>;
+  /** Index into the taking order, per team. */
+  next: Record<Team, number>;
+  turn: Team;
+  stage: 'kick' | 'flight' | 'result';
+  timer: number;
+  takerId: number;
+  winner: Team | null;
 }
 
 export type MatchEventType =
@@ -155,6 +190,12 @@ export type MatchEventType =
   | 'goal-kick'
   | 'free-kick'
   | 'penalty'
+  | 'offside'
+  | 'half-time'
+  | 'extra-time'
+  | 'shootout'
+  | 'shootout-kick'
+  | 'sub'
   | 'full-time';
 
 export interface MatchEvent {
@@ -166,11 +207,17 @@ export interface MatchEvent {
   team?: Team;
   playerId?: number;
   card?: Card;
-  /** For 'kick': what kind of kick. */
+  /** For 'kick': what kind of kick, and whether it was a header. */
   kick?: KickType;
+  header?: boolean;
+  /** For 'shootout-kick'. */
+  outcome?: ShootoutOutcome;
+  /** For 'sub': the shirt number of the player who went off. */
+  offNumber?: number;
 }
 
-export type Phase = 'play' | 'goal' | 'out' | 'foul' | 'full-time';
+/** 'break' is half-time (or the turn into extra time). */
+export type Phase = 'play' | 'goal' | 'out' | 'foul' | 'break' | 'shootout' | 'full-time';
 
 export interface MatchState {
   tick: number;
@@ -192,6 +239,18 @@ export interface MatchState {
   passStick: Vec2 | null;
   /** Where the last through ball was played into: its receiver runs there to take it in stride. */
   passSpace: Vec2 | null;
+  /** Teammates of the last player to play the ball who were offside at that moment. */
+  offside: { team: Team; kickerId: number; ids: number[] } | null;
+  /** 1 and 2 are the halves, 3 and 4 the halves of extra time. */
+  period: number;
+  /** Who kicked off the first half (the other side kicks off the second). */
+  firstKickoff: Team;
+  shootout: Shootout | null;
+  /** The human's stick on the last tick (his keeper dives with it at a penalty). */
+  stick: Vec2;
+  /** Substitutions made, and asked for (made at the next stoppage). */
+  subs: Record<Team, { made: number; queue: number[] }>;
+  stats: MatchStats;
   lastTouch: Team;
   lastToucherId: number;
   referee: { x: number; y: number; vx: number; vy: number };

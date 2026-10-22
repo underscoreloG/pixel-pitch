@@ -17,10 +17,14 @@ Browser football game: FIFA-style gameplay, pixel-art look. Red (you) vs Blue (C
 
 - 11 v 11 in a 4-4-2, team AI that presses, covers, keeps shape, passes and shoots
 - Ball physics in 3D: height, air drag, bounces, rolling friction, posts and crossbar
-- Charged passes, shots and lobs, pass assist towards the teammate you aim at, fake shots
+- Charged passes, shots, lobs and through balls, pass assist towards the teammate you aim at, fake shots
+- Ball spin: curled finesse shots and whipped crosses; headers and aerial duels, chest control
 - Aim guide showing the predicted path and landing spot, sized by the kick's inaccuracy
 - Standing and slide tackles, fouls judged by severity, yellow and red cards, free kicks and penalties
-- Corners, goal kicks, throw-ins and kickoffs for both sides, with a referee following play
+- Offside (switchable), corners, goal kicks, throw-ins and kickoffs, with a referee following play
+- Two halves; a draw can go to extra time and a penalty shootout (you dive for your keeper on CPU penalties)
+- Player ratings, stamina and three substitutions a side; full-time match stats
+- Keyboard, gamepad (menus too) and on-screen touch controls
 - Training mode (you against the keeper), match clock, three difficulty levels
 - Deterministic simulation: same seed and inputs, same match
 
@@ -49,13 +53,16 @@ Every push to `main` runs the tests, builds and deploys to GitHub Pages (`.githu
 | Through ball | W | Y |
 | Finesse (hold with shoot or lob: curled shot, whipped cross) | E | RB |
 | Switch player | Q | LB |
-| Pause | Esc | |
+| Pause / substitutions | Esc | Start |
 
 Hold a kick button to charge, release to kick. Press another kick button while charging to fake.
 A through ball goes into the space ahead of the teammate you aim at (more charge, further ahead) and he runs onto it.
 Passes and lobs snap to the teammate in the stick direction (preferring one with an open lane) with the right weight; control follows the pass.
 Shots aimed near the goal are pulled inside the posts and kept under the bar, and kicks on the run allow for your momentum (Options > KICKS: MANUAL turns the assistance off).
 Defending: hold S to run at the ball carrier and tackle when in range; getting your body on the ball can win it too.
+Headers: hold or tap a kick key as a high ball reaches your player (D at goal, S to a teammate, A to clear); without one he cushions it down.
+On a CPU penalty, hold up or down as it is struck and your keeper dives that way.
+Menus work with the gamepad (d-pad, A, B, Start). On a touch screen an on-screen stick and buttons replace the keyboard (full tilt sprints).
 
 ## How it's built
 
@@ -69,4 +76,5 @@ Defending: hold S to run at the ball carrier and tackle when in range; getting y
 
 ## Not done yet
 
-Offside, halves and side switching, substitutions, curve/spin on the ball, a recorded crowd sound, gamepad navigation in menus.
+Sides don't switch ends at half-time (you always attack right). No recorded crowd sound, no team or kit selection, no replays.
+The CPU still plays a lot of long balls; fewer of them currently makes its defending leak goals.

@@ -152,6 +152,10 @@ export const POSES: { name: string; pose: Pose }[] = [
     pose: stand({ legL: leg(0.35, 0.75, 0.22), legR: leg(0.35, 0.75, 0.22), armL: arm(0.9, 0.4, 0.55), armR: arm(0.9, 0.4, 0.55), lean: 0.35 }),
   },
   { name: 'hold', pose: stand({ armL: arm(1.0, 1.1, 0.25), armR: arm(1.0, 1.1, 0.25) }) },
+  {
+    name: 'header',
+    pose: stand({ legL: leg(-0.3, 1.1), legR: leg(0.15, 1.4), armL: arm(0.7, 0.5, 0.9), armR: arm(0.7, 0.5, 0.9), lean: -0.2, lift: 0.45 }),
+  },
   { name: 'point', pose: stand({ armR: arm(1.6, 0.05, 0.5) }) },
   { name: 'card', pose: stand({ armR: arm(3.05, 0, 0.1) }) },
   {

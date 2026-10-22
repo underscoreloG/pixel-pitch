@@ -1,8 +1,11 @@
-import { predictCrossing } from './ball';
+import { predictCrossing, stepBall } from './ball';
 import {
   AI_LEVELS,
   BALL_RADIUS,
   CENTER,
+  DT,
+  GOAL_AREA_DEPTH,
+  GOAL_AREA_WIDTH,
   GOAL_HEIGHT,
   GOAL_WIDTH,
   KEEPER_ACCEL,
@@ -18,12 +21,13 @@ import {
   KEEPER_SPEED,
   KEEPER_SURE_CATCH_SPEED,
   PENALTY_READ,
+  PITCH_WIDTH,
 } from './constants';
 import { emit } from './events';
-import { kickBall, lobPowerFor, passPowerFor } from './kick';
+import { kickBall, passPowerFor, puntPowerFor } from './kick';
 import { random, randomRange } from './rng';
 import { active, attackDir, byId, clamp, dist, inPenaltyArea, ownGoalX } from './team';
-import type { Footballer, MatchState } from './types';
+import type { Ball, Footballer, MatchState } from './types';
 
 /** Chance a keeper bites on a fake shot, per difficulty. */
 const BITE_CHANCE = [0.75, 0.55, 0.35];
@@ -78,20 +82,28 @@ export function stepKeeper(s: MatchState, k: Footballer, dt: number): void {
 /**
  * From 11 m there is no time to react: as the penalty is struck the keeper
  * commits to a side. He reads it right with PENALTY_READ odds, otherwise he
- * goes the wrong way or (sometimes) stays put and reacts as normal.
+ * goes the wrong way or (sometimes) stays put and reacts as normal. The
+ * human's keeper dives the way the stick is held, or stays up without it.
  */
 function penaltyGuess(s: MatchState, k: Footballer): boolean {
   const gk = k.gk!;
   if (!gk.facingPenalty || s.setPiece) return false;
   gk.facingPenalty = false;
-  const crossing = predictCrossing(s.ball, k.x, 2);
-  if (!crossing) return false;
-  const side = Math.sign(crossing.y - CENTER.y) || (random(s.rng) < 0.5 ? 1 : -1);
-  const read = random(s.rng) < PENALTY_READ[s.settings.difficulty];
-  if (!read && random(s.rng) < 0.08) return false;
+  let dive: number;
+  if (k.team === 'home' && !s.settings.autoplay) {
+    if (Math.abs(s.stick.y) < 0.3) return false;
+    dive = Math.sign(s.stick.y);
+  } else {
+    const crossing = predictCrossing(s.ball, k.x, 2);
+    if (!crossing) return false;
+    const side = Math.sign(crossing.y - CENTER.y) || (random(s.rng) < 0.5 ? 1 : -1);
+    const read = random(s.rng) < PENALTY_READ[s.settings.difficulty];
+    if (!read && random(s.rng) < 0.08) return false;
+    dive = read ? side : -side;
+  }
   gk.state = 'diving';
   gk.stateTimer = KEEPER_DIVE_TIME;
-  gk.diveDir = read ? side : -side;
+  gk.diveDir = dive;
   k.vx = 0;
   k.vy = gk.diveDir * KEEPER_LEVELS[s.settings.difficulty].diveSpeed;
   return true;
@@ -172,6 +184,13 @@ function positionTarget(s: MatchState, k: Footballer): { x: number; y: number } 
     const nearestOpp = Math.min(...active(s).filter((p) => p.team !== k.team).map((p) => dist(p, ball)));
     if (keeperDist < nearestOpp + 2) return { x: ball.x + ball.vx * 0.3, y: ball.y + ball.vy * 0.3 };
   }
+  // A high ball dropping into his six-yard box: come and take it.
+  if (!carrier && !s.setPiece && ball.z > 1) {
+    const drop = dropPoint(ball);
+    if (drop && Math.abs(drop.x - goalX) < GOAL_AREA_DEPTH + 1 && Math.abs(drop.y - CENTER.y) < GOAL_AREA_WIDTH / 2) {
+      return drop;
+    }
+  }
 
   const gx = ball.x - goalX;
   const gy = ball.y - CENTER.y;
@@ -182,6 +201,16 @@ function positionTarget(s: MatchState, k: Footballer): { x: number; y: number } 
     x: goalX + (gx / d) * off,
     y: CENTER.y + clamp((gy / d) * off, -GOAL_WIDTH / 2 - 0.5, GOAL_WIDTH / 2 + 0.5),
   };
+}
+
+/** Where a high ball comes down to a keeper's catching height, within 2 s. */
+function dropPoint(ball: Ball): { x: number; y: number } | null {
+  const b = { ...ball };
+  for (let i = 0; i < 120; i++) {
+    stepBall(b, DT);
+    if (b.vz < 0 && b.z <= 2.3) return { x: b.x, y: b.y };
+  }
+  return null;
 }
 
 function moveTo(k: Footballer, target: { x: number; y: number }, dt: number, maxSpeed: number): void {
@@ -213,7 +242,7 @@ function moveTo(k: Footballer, target: { x: number; y: number }, dt: number, max
 function tryClaimBall(s: MatchState, k: Footballer): void {
   const gk = k.gk!;
   const ball = s.ball;
-  if (gk.ignoreBall > 0 || s.setPiece || s.phase !== 'play') return;
+  if (gk.ignoreBall > 0 || s.setPiece || (s.phase !== 'play' && s.phase !== 'shootout')) return;
   // Hands only inside his own box.
   if (!inPenaltyArea(k.team, ball.x, ball.y)) return;
   const carrier = byId(s, s.possessor);
@@ -257,31 +286,52 @@ function tryClaimBall(s: MatchState, k: Footballer): void {
 }
 
 /** Rolls it to a free defender if one is open, otherwise kicks long to the strikers. */
+/**
+ * Goal kicks go long, upfield to the attacker with most room. After a catch he
+ * rolls it to a defender only if nobody is near him; otherwise long too.
+ */
 function distribute(s: MatchState, k: Footballer): void {
   const gk = k.gk!;
+  const goalKick = gk.goalKick;
+  gk.goalKick = false;
   const mates = active(s).filter((p) => p.team === k.team && !p.gk);
   const opps = active(s).filter((p) => p.team !== k.team);
-  const open = mates
-    .filter((m) => m.role === 'DF' && dist(m, k) < 35 && Math.min(...opps.map((o) => dist(o, m))) > 7)
-    .sort((a, b) => dist(a, k) - dist(b, k))[0];
+  const room = (at: { x: number; y: number }) => Math.min(...opps.map((o) => dist(o, at)));
   gk.state = 'positioning';
   gk.ignoreBall = 0.6;
   const errorMul = AI_LEVELS[s.settings.difficulty].accuracy;
+  const open = goalKick
+    ? undefined
+    : mates
+        .filter((m) => m.role === 'DF' && dist(m, k) < 30 && room(m) > 12)
+        .sort((a, b) => dist(a, k) - dist(b, k))[0];
   if (open) {
     const d = dist(open, k);
     kickBall(s, k, 'pass', passPowerFor(d), (open.x - k.x) / d, (open.y - k.y) / d, { errorMul, target: open.id });
     return;
   }
-  const forwards = mates.filter((m) => m.role === 'FW');
-  const pool = forwards.length ? forwards : mates;
-  const target = pool[Math.floor(random(s.rng) * pool.length)];
-  if (!target) {
-    kickBall(s, k, 'lob', 0.9, attackDir(k.team), 0, { errorMul });
-    return;
+  // Land it where a teammate upfield gets there well before any opponent: on him, or wider of him.
+  const dir = attackDir(k.team);
+  let best: { mate: Footballer; spot: { x: number; y: number }; race: number } | undefined;
+  for (const m of mates) {
+    if (m.role === 'DF' || dir * (m.x - k.x) < 30) continue;
+    const wide = Math.sign(m.y - CENTER.y) || 1;
+    for (const off of [0, 6]) {
+      const want = { x: m.x, y: clamp(m.y + wide * off, 3, PITCH_WIDTH - 3) };
+      const d = dist(k, want);
+      const spot = d > MAX_PUNT ? { x: k.x + ((want.x - k.x) / d) * MAX_PUNT, y: k.y + ((want.y - k.y) / d) * MAX_PUNT } : want;
+      const race = room(spot) - dist(m, spot);
+      if (!best || race > best.race) best = { mate: m, spot, race };
+    }
   }
-  const d = dist(target, k);
-  kickBall(s, k, 'lob', lobPowerFor(Math.min(d, 60)), (target.x - k.x) / d, (target.y - k.y) / d, {
+  const spot = best?.spot ?? { x: k.x + dir * 55, y: CENTER.y + (random(s.rng) < 0.5 ? -18 : 18) };
+  const d = dist(k, spot) || 1;
+  kickBall(s, k, 'lob', puntPowerFor(d), (spot.x - k.x) / d, (spot.y - k.y) / d, {
     errorMul,
-    target: target.id,
+    target: best?.mate.id,
+    punt: true,
   });
 }
+
+/** Furthest a keeper's kick is aimed (it bounces on from there). */
+const MAX_PUNT = 62;

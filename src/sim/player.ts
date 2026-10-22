@@ -5,6 +5,11 @@ import {
   DT,
   DRIBBLE_STIFFNESS,
   GAIN_CONTROL_RADIUS,
+  HEADER_MAX_Z,
+  HEADER_MIN_Z,
+  HEADER_REACH,
+  CHEST_CONTROL_Z,
+  CHEST_MAX_SPEED,
   HUMAN_BODY_STEAL,
   HUMAN_TACKLE_REACH,
   HUMAN_TACKLE_SUCCESS,
@@ -30,6 +35,7 @@ import { emit } from './events';
 import { isSprinting, kickBall, receiveAt, resolveHumanKick } from './kick';
 import { random, randomRange } from './rng';
 import { active, byId, clamp, dist } from './team';
+import { NEUTRAL, speedFactor } from './squad';
 import { fromBehind, standingTackle, startSlide } from './tackle';
 import type { Buttons, Footballer, InputFrame, KickType, MatchState, Role, Team } from './types';
 
@@ -64,6 +70,7 @@ export function createFootballer(
     throwAnim: 0,
     fakeAnim: 0,
     lastFakeTick: -1,
+    jump: 0,
     tackleCooldown: 0,
     tackleAnim: 0,
     slide: 0,
@@ -71,7 +78,12 @@ export function createFootballer(
     down: 0,
     yellow: 0,
     sentOff: false,
-    gk: role === 'GK' ? { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0, diveDir: 0, facingPenalty: false } : null,
+    stamina: 1,
+    ratings: { ...NEUTRAL },
+    gk:
+      role === 'GK'
+        ? { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0, diveDir: 0, facingPenalty: false, goalKick: false }
+        : null,
     think: 0,
   };
 }
@@ -81,6 +93,7 @@ export function tickTimers(p: Footballer, dt: number): void {
   p.kickAnim = Math.max(0, p.kickAnim - dt);
   p.throwAnim = Math.max(0, p.throwAnim - dt);
   p.fakeAnim = Math.max(0, p.fakeAnim - dt);
+  p.jump = Math.max(0, p.jump - dt);
   p.tackleCooldown = Math.max(0, p.tackleCooldown - dt);
   p.tackleAnim = Math.max(0, p.tackleAnim - dt);
   p.down = Math.max(0, p.down - dt);
@@ -189,10 +202,13 @@ export function resolvePossession(s: MatchState): void {
   )
     carrier = undefined;
 
+  // Below the knee he takes it on his foot; up to the chest, a slowish ball is killed with chest or thigh.
+  const chestHigh = ball.z >= MAX_CONTROL_HEIGHT && ball.z < CHEST_CONTROL_Z;
+  const controllable = ball.z < MAX_CONTROL_HEIGHT || (chestHigh && Math.hypot(ball.vx, ball.vy, ball.vz) < CHEST_MAX_SPEED);
   if (!carrier && !s.setPiece && s.phase === 'play') {
     let best = Infinity;
     for (const p of active(s)) {
-      if (!canControl(p) || ball.z >= MAX_CONTROL_HEIGHT) continue;
+      if (!canControl(p) || !controllable) continue;
       // The intended receiver is set for it and stretches a little further.
       const reach = p.id === s.passTarget ? 1.1 : GAIN_CONTROL_RADIUS;
       const d = dist(p, ball);
@@ -207,6 +223,11 @@ export function resolvePossession(s: MatchState): void {
 
   const prev = s.possessor;
   s.possessor = carrier ? carrier.id : -1;
+  // Chested down to his feet.
+  if (carrier && ball.z >= MAX_CONTROL_HEIGHT) {
+    ball.z = MAX_CONTROL_HEIGHT * 0.5;
+    ball.vz = 0;
+  }
   if (carrier) {
     if (carrier.id !== prev) {
       s.lastTouch = carrier.team;
@@ -348,14 +369,14 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     const tx = aimX - p.x;
     const ty = aimY - p.y;
     const n = Math.hypot(tx, ty) || 1;
-    locomote(p, tx / n, ty / n, input.sprint, false, dt);
+    locomote(p, tx / n, ty / n, input.sprint, false, dt, speedFactor(p));
   } else if (s.passTarget === p.id && !carrier && canMove(p) && receiverOnAuto(s, input)) {
     // Receiving a pass: cut across to meet the ball (or run onto a through ball) until the player steers somewhere new.
     const meet = receiveAt(s, meetingPoint(s, p));
     const tx = meet.x - p.x;
     const ty = meet.y - p.y;
     const n = Math.hypot(tx, ty) || 1;
-    if (n > 0.3) locomote(p, tx / n, ty / n, true, false, dt);
+    if (n > 0.3) locomote(p, tx / n, ty / n, true, false, dt, speedFactor(p));
   } else if (atDeadBall) {
     // Lined up just behind the ball, always within kicking reach: the stick aims and he steps round it.
     const m = Math.hypot(input.moveX, input.moveY);
@@ -367,7 +388,7 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
     p.y = s.ball.y - p.facingY * 0.6;
     p.vx = p.vy = 0;
   } else if (canMove(p)) {
-    locomote(p, input.moveX, input.moveY, input.sprint, s.possessor === p.id, dt);
+    locomote(p, input.moveX, input.moveY, input.sprint, s.possessor === p.id, dt, speedFactor(p));
   }
 
   if (defending && !p.charging && carrier) {
@@ -383,10 +404,18 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
   }
   s.prevButtons = buttons;
 
+  // A kick key held (or pressed) as a high ball arrives: head it with whatever charge there is.
+  if (p.charging && canHeadNow(s, p)) {
+    p.pending = { type: p.charging, power: Math.max(MIN_KICK_POWER, p.charge), ttl: KICK_BUFFER_TIME, finesse: false };
+    p.charging = null;
+    p.charge = 0;
+  }
   if (p.pending) {
-    if (canKickNow(s, p)) {
+    const header = !canKickNow(s, p) && canHeadNow(s, p);
+    if (header || canKickNow(s, p)) {
       const sprint = isSprinting(p, input.sprint);
-      const k = resolveHumanKick(s, p, p.pending.type, p.pending.power, input.moveX, input.moveY, p.pending.finesse);
+      const pk = p.pending;
+      const k = resolveHumanKick(s, p, pk.type, pk.power, input.moveX, input.moveY, pk.finesse, header);
       kickBall(s, p, p.pending.type, k.power, k.dirX, k.dirY, { ...k, sprinting: sprint });
       // Control follows the pass, FIFA style; the stick used to aim it doesn't steer the receiver.
       if (k.target >= 0) {
@@ -444,6 +473,8 @@ function meetingPoint(s: MatchState, p: Footballer): { x: number; y: number } {
   const b = { ...s.ball };
   for (let i = 1; i <= 150; i++) {
     stepBall(b, DT);
+    // Out of reach overhead until it comes down to head height.
+    if (b.z > HEADER_MAX_Z) continue;
     if (dist(p, b) <= PLAYER_SPRINT_SPEED * i * DT * 0.85 + 0.5) return { x: b.x, y: b.y };
   }
   return { x: b.x, y: b.y };
@@ -465,8 +496,16 @@ function receiverOnAuto(s: MatchState, input: InputFrame): boolean {
   return false;
 }
 
+/** Can this player head the ball now: loose, between kicking height and head height, within reach. */
+export function canHeadNow(s: MatchState, p: Footballer): boolean {
+  if (s.phase !== 'play' || s.setPiece || s.possessor >= 0 || p.gk || p.kickCooldown > 0 || !canMove(p)) return false;
+  if (s.players.some((q) => q.gk?.state === 'holding')) return false;
+  const b = s.ball;
+  return b.z >= HEADER_MIN_Z && b.z <= HEADER_MAX_Z && dist(p, b) < HEADER_REACH;
+}
+
 export function canKickNow(s: MatchState, p: Footballer): boolean {
-  if (s.phase !== 'play' || p.kickCooldown > 0 || !canMove(p)) return false;
+  if ((s.phase !== 'play' && s.phase !== 'shootout') || p.kickCooldown > 0 || !canMove(p)) return false;
   if (s.players.some((q) => q.gk?.state === 'holding')) return false;
   if (s.setPiece && (s.setPiece.takerId !== p.id || s.setPiece.timer > 0)) return false;
   return dist(p, s.ball) < KICK_RADIUS && s.ball.z < MAX_KICK_HEIGHT;

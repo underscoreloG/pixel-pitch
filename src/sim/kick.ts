@@ -6,6 +6,7 @@ import {
   GOAL_WIDTH,
   GOAL_Y_MAX,
   GOAL_Y_MIN,
+  HEADER_TIME,
   KICK_COOLDOWN,
   PASS_ASSIST_CONE,
   PITCH_LENGTH,
@@ -15,6 +16,7 @@ import {
   THROW_HEIGHT,
 } from './constants';
 import { emit } from './events';
+import { markOffside, offsidePosition } from './offside';
 import { random } from './rng';
 import { active, attackDir, clamp, dist, keeperOf, other, segmentDistance, targetGoalX } from './team';
 import type { Ball, Footballer, KickType, MatchState, Vec2 } from './types';
@@ -40,12 +42,18 @@ export interface KickStyle {
   lift?: number;
   /** Side spin, rad/s the path turns (+ turns it from +x towards +y). */
   spin?: number;
+  /** Off the head: less pace, harder to place; shots are aimed down, `lob` is a clearance. */
+  header?: boolean;
+  /** A keeper's long kick downfield (with `lob`): goes about twice as far. */
+  punt?: boolean;
 }
 
 /** Launch speed (m/s) of each kick at a given power. */
 const passSpeed = (power: number): number => 8 + 18 * power;
 const shotSpeed = (power: number): number => 22 + 13 * power;
 const lobSpeed = (power: number): number => 8 + 12 * power;
+const puntSpeed = (power: number): number => 18 + 16 * power;
+const puntLift = (power: number): number => 9 + 6 * power;
 
 /** Highest an assisted shot crosses the goal line (the bar is at 2.44 m). */
 const ASSISTED_SHOT_MAX_Z = 2;
@@ -86,15 +94,24 @@ export function planKick(
       }
       break;
     case 'lob':
-      // Whipped (finesse) crosses are flatter and quicker.
-      speed = lobSpeed(power) * (style.finesse ? 1.15 : 1);
-      vz = (5 + 7 * power) * (style.finesse ? 0.75 : 1);
+      if (style.punt) {
+        speed = puntSpeed(power);
+        vz = puntLift(power);
+      } else {
+        // Whipped (finesse) crosses are flatter and quicker.
+        speed = lobSpeed(power) * (style.finesse ? 1.15 : 1);
+        vz = (5 + 7 * power) * (style.finesse ? 0.75 : 1);
+      }
       errorDeg = 3;
       break;
   }
   let z = ball.z;
   const throwIn = s.setPiece?.type === 'throw-in';
-  if (throwIn) {
+  if (style.header) {
+    speed = type === 'shot' ? 10 + 8 * power : type === 'lob' ? 9 + 7 * power : 3 + 11 * power;
+    vz = type === 'shot' ? -1.5 + 1.5 * power : type === 'lob' ? 5 + 2 * power : -1;
+    errorDeg = type === 'shot' ? 4 : type === 'lob' ? 8 : 5;
+  } else if (throwIn) {
     // Every button throws, lob throws higher. Released from above the head.
     speed = 6 + 10 * power;
     vz = (type === 'lob' ? 3 : 1.5) + 2 * power;
@@ -128,7 +145,9 @@ export function kickBall(
 ): void {
   const plan = planKick(s, p, type, power, dirX, dirY, opts);
   const throwIn = s.setPiece?.type === 'throw-in';
-  const err = ((random(s.rng) * 2 - 1) * plan.errorDeg * (opts.errorMul ?? 1) * Math.PI) / 180;
+  // A better finisher (or passer) is a little more accurate.
+  const skill = 2 - (type === 'shot' ? p.ratings.shooting : p.ratings.passing);
+  const err = ((random(s.rng) * 2 - 1) * plan.errorDeg * (opts.errorMul ?? 1) * skill * Math.PI) / 180;
   const cos = Math.cos(err);
   const sin = Math.sin(err);
   const ball = s.ball;
@@ -145,18 +164,20 @@ export function kickBall(
   p.facingX = ball.vx / n;
   p.facingY = ball.vy / n;
   p.kickCooldown = KICK_COOLDOWN;
-  if (throwIn) p.throwAnim = 0.3;
+  if (opts.header) p.jump = HEADER_TIME;
+  else if (throwIn) p.throwAnim = 0.3;
   else p.kickAnim = 0.2;
   p.charging = null;
   p.charge = 0;
   p.pending = null;
+  markOffside(s, p);
   s.possessor = -1;
   s.setPiece = null;
   s.lastTouch = p.team;
   s.lastToucherId = p.id;
   s.passTarget = opts.target ?? -1;
   s.passSpace = opts.space ?? null;
-  emit(s, 'kick', { power, team: p.team, playerId: p.id, kick: type });
+  emit(s, 'kick', { power, team: p.team, playerId: p.id, kick: type, header: !!opts.header });
 }
 
 /** Teammate closest to the aim direction, within the assist cone, preferring an open lane. */
@@ -175,7 +196,9 @@ export function findPassTarget(s: MatchState, p: Footballer, dirX: number, dirY:
     // Prefer on-line over near: angle dominates, distance breaks ties. The keeper is a last resort,
     // and a mate with an opponent sitting in the lane loses out to an open one nearby.
     const lane = Math.min(...opps.map((o) => segmentDistance(o, p, t)));
-    const score = angle * 30 + d * 0.15 + (t.gk ? 25 : 0) + Math.max(0, 3 - lane) * 4;
+    // An offside teammate would only be flagged: prefer an onside one.
+    const flagged = s.settings.offside !== false && offsidePosition(s, t) ? 15 : 0;
+    const score = angle * 30 + d * 0.15 + (t.gk ? 25 : 0) + Math.max(0, 3 - lane) * 4 + flagged;
     if (score < bestScore) {
       bestScore = score;
       best = t;
@@ -244,6 +267,18 @@ export function lobPowerFor(distance: number, whipped = false): number {
   return hi;
 }
 
+/** Power of a keeper's long kick that lands about `distance` away (60-odd metres at most). */
+export function puntPowerFor(distance: number): number {
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 10; i++) {
+    const mid = (lo + hi) / 2;
+    if (lobCarry(puntSpeed(mid), puntLift(mid)) < distance) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
 /** Ball speed once a pass struck at `v0` has travelled `distance` (0 if it stops short). */
 function speedAfter(v0: number, distance: number): number {
   const b: Ball = { x: 0, y: 0, z: 0, vx: v0, vy: 0, vz: 0.4 };
@@ -296,10 +331,12 @@ export function resolveHumanKick(
   moveX: number,
   moveY: number,
   finesse = false,
+  header = false,
 ): HumanKick {
   const m = Math.hypot(moveX, moveY);
   const dirX = m < 0.3 ? p.facingX : moveX / m;
   const dirY = m < 0.3 ? p.facingY : moveY / m;
+  if (header) return humanHeader(s, p, type, charge, dirX, dirY, m < 0.3);
   const throwIn = s.setPiece?.type === 'throw-in';
   // Only shots and crosses curl; a throw-in is thrown.
   const curled = finesse && !throwIn && (type === 'shot' || type === 'lob');
@@ -343,6 +380,47 @@ export function resolveHumanKick(
     return { power, ...curlHeading(s, p, type, power, style, from, lead), target: aim.target, errorMul, ...style };
   }
   return { power, ...allowForRun(p, aim.dirX, aim.dirY, speedOf(power)), target: aim.target, errorMul };
+}
+
+/**
+ * A header from the human: at goal (assisted: inside the far post, or where the
+ * stick points), a headed pass to the teammate in the stick direction, or a
+ * clearance. A tap still gets some pace on it.
+ */
+function humanHeader(
+  s: MatchState,
+  p: Footballer,
+  type: KickType,
+  charge: number,
+  dirX: number,
+  dirY: number,
+  neutral: boolean,
+): HumanKick {
+  const power = 0.4 + 0.6 * charge;
+  if (s.settings.assist === false) return { power, dirX, dirY, target: -1, errorMul: 1, header: true };
+  const from = kickOrigin(s);
+  if (type === 'shot') {
+    const goalX = targetGoalX(p.team);
+    const keeper = keeperOf(s, other(p.team));
+    const k = Math.abs(dirX) > 0.05 ? (goalX - from.x) / dirX : -1;
+    const far = CENTER.y + (keeper && keeper.y > CENTER.y ? -1 : 1) * (GOAL_WIDTH / 2 - 0.6);
+    const ty = clamp(neutral || k <= 0 ? far : from.y + dirY * k, GOAL_Y_MIN + 0.5, GOAL_Y_MAX - 0.5);
+    const n = Math.hypot(goalX - from.x, ty - from.y) || 1;
+    return { power, dirX: (goalX - from.x) / n, dirY: (ty - from.y) / n, target: -1, errorMul: 0.5, header: true };
+  }
+  if (type === 'lob') return { power, dirX, dirY, target: -1, errorMul: 0.6, header: true };
+  const t = findPassTarget(s, p, dirX, dirY);
+  if (!t) return { power: charge, dirX, dirY, target: -1, errorMul: 0.6, header: true };
+  const d = dist(from, t);
+  const n = d || 1;
+  return {
+    power: clamp((d - 2) / 18, 0.1, 1),
+    dirX: (t.x - from.x) / n,
+    dirY: (t.y - from.y) / n,
+    target: t.id,
+    errorMul: 0.5,
+    header: true,
+  };
 }
 
 /** Kick direction snapped to the teammate in the aim direction (passes and lobs), led for his run. */

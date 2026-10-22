@@ -14,7 +14,9 @@ import {
   PITCH_WIDTH,
 } from '../sim/constants';
 import { isSprinting, planKick, resolveHumanKick } from '../sim/kick';
-import { NO_INPUT, createMatch, stepMatch } from '../sim/match';
+import { NO_INPUT, createMatch, matchMinute, stepMatch } from '../sim/match';
+import { queueSub, subsLeft } from '../sim/squad';
+import { isTouchDevice, showTouchControls } from '../ui/touch';
 import { attackDir } from '../sim/team';
 import type { Ball, Footballer, InputFrame, KickType, MatchEvent, MatchSettings, MatchState, Team } from '../sim/types';
 import { Menu, type Mode } from '../ui/menu';
@@ -192,6 +194,17 @@ export class MatchScene extends Phaser.Scene {
         this.startDemo();
       },
       settingsChanged: (s) => this.applySettings(s),
+      squad: () =>
+        this.state.settings.mode === 'match' && !this.demo
+          ? this.state.players
+              .filter((p) => p.team === 'home' && !p.gk && !p.sentOff)
+              .map((p) => ({
+                id: p.id,
+                label: `#${String(p.number).padEnd(3)}${p.role}  ${String(Math.round(p.stamina * 100)).padStart(3)}%${this.state.subs.home.queue.includes(p.id) ? ' OFF' : ''}`,
+              }))
+          : null,
+      subsLeft: () => subsLeft(this.state, 'home') - this.state.subs.home.queue.length,
+      substitute: (id) => queueSub(this.state, 'home', id),
     });
     this.applySettings(this.settings);
   }
@@ -203,6 +216,8 @@ export class MatchScene extends Phaser.Scene {
       difficulty: this.settings.difficulty,
       autoplay: kind === 'demo',
       assist: this.settings.assist,
+      offside: this.settings.offside,
+      ifDrawn: this.settings.ifDrawn,
     };
     this.state = createMatch(Date.now() >>> 0, settings);
     this.prev = snapshot(this.state);
@@ -229,8 +244,9 @@ export class MatchScene extends Phaser.Scene {
   private setRunning(on: boolean): void {
     this.running = on;
     this.hud.hidden = !on;
-    this.helpEl.hidden = !on || !this.settings.showHelp;
+    this.helpEl.hidden = !on || !this.settings.showHelp || isTouchDevice();
     this.radar.hidden = !on || this.state.settings.mode !== 'match';
+    showTouchControls(on);
     if (on) this.inputReader.disarm();
   }
 
@@ -239,7 +255,7 @@ export class MatchScene extends Phaser.Scene {
     sfx.enabled = s.sound;
     sfx.crowdEnabled = s.crowd;
     sfx.applySettings();
-    this.helpEl.hidden = !this.running || !s.showHelp;
+    this.helpEl.hidden = !this.running || !s.showHelp || isTouchDevice();
     this.layout();
   }
 
@@ -302,6 +318,7 @@ export class MatchScene extends Phaser.Scene {
     else if (p.slide === 0 && p.down === 0) fig.turnTo(Math.atan2(p.facingY, p.facingX), dt);
     if (p.slide > 0) return 'slide';
     if (p.down > 0) return 'downR';
+    if (p.jump > 0) return 'header';
     if (p.tackleAnim > 0) return 'tackle';
     if (p.throwAnim > 0) return 'hold';
     if (throwIn) return 'throw';
@@ -404,6 +421,15 @@ export class MatchScene extends Phaser.Scene {
         const x = this.snap(head.x);
         const y = this.snap(head.y) - 3;
         g.fillStyle(0xf4d35e, 1).fillRect(x - 2, y, 5, 1).fillRect(x - 1, y + 1, 3, 1).fillRect(x, y + 2, 1, 1);
+        if (s.settings.mode === 'match') {
+          // Stamina, just under his feet.
+          const feet = project(v.players[i], v.players[i + 1], 0);
+          const fx = this.snap(feet.x) - 4;
+          const fy = this.snap(feet.y) + 2;
+          const color = p.stamina > 0.6 ? 0x5ad65a : p.stamina > 0.35 ? 0xf4d35e : 0xe04848;
+          g.fillStyle(0x000000, 0.6).fillRect(fx - 1, fy - 1, 10, 3);
+          g.fillStyle(color, 1).fillRect(fx, fy, Math.max(1, Math.round(8 * p.stamina)), 1);
+        }
         if (p.charging) {
           g.fillStyle(0x000000, 0.7).fillRect(x - 7, y - 5, 14, 3);
           g.fillStyle(POWER_COLORS[p.charging], 1).fillRect(x - 6, y - 4, Math.round(12 * p.charge), 1);
@@ -579,6 +605,31 @@ export class MatchScene extends Phaser.Scene {
         case 'free-kick':
           this.message(`FREE KICK ${name}`);
           break;
+        case 'offside':
+          sfx.whistle('short');
+          this.message(`OFFSIDE ${name}`);
+          break;
+        case 'sub': {
+          const p = this.state.players[e.playerId ?? 0];
+          this.message(`SUBSTITUTION ${name}\n#${e.offNumber} OFF, #${p.number} ON`, 2.2);
+          break;
+        }
+        case 'half-time':
+          sfx.whistle('long');
+          this.message('HALF TIME', 2.8);
+          break;
+        case 'extra-time':
+          sfx.whistle('long');
+          this.message('EXTRA TIME', 2.8);
+          break;
+        case 'shootout':
+          sfx.whistle('long');
+          this.message('PENALTIES', 2.4);
+          break;
+        case 'shootout-kick':
+          if (e.outcome === 'goal') sfx.cheer();
+          this.message(e.outcome === 'goal' ? `GOAL! ${name}` : e.outcome === 'saved' ? 'SAVED!' : 'MISSED!', 1.4);
+          break;
         case 'penalty':
           this.message(`PENALTY ${name}!`, 2.4);
           break;
@@ -597,9 +648,14 @@ export class MatchScene extends Phaser.Scene {
           sfx.whistle('end');
           this.message('FULL TIME', 3);
           const { home, away } = this.state.score;
+          const so = this.state.shootout;
+          const pens = so?.winner
+            ? `<br /><span class="pens">${TEAM_NAME[so.winner]} WIN ${Math.max(so.goals.home, so.goals.away)}-${Math.min(so.goals.home, so.goals.away)} ON PENALTIES</span>`
+            : '';
+          const table = this.state.settings.mode === 'match' ? statsTable(this.state) : '';
           this.time.delayedCall(2600, () => {
             this.setRunning(false);
-            this.menu.show('result', `RED ${home} - ${away} BLUE`);
+            this.menu.show('result', `RED ${home} - ${away} BLUE${pens}</p>${table}<p>`);
           });
           break;
         }
@@ -611,8 +667,8 @@ export class MatchScene extends Phaser.Scene {
     const s = this.state;
     if (s.settings.mode === 'match') {
       this.scoreEl.textContent = `RED ${s.score.home} - ${s.score.away} BLUE`;
-      const minute = Math.min(90, Math.floor((s.clock / s.settings.duration) * 90));
-      this.clockEl.textContent = `${minute}'`;
+      const so = s.shootout;
+      this.clockEl.textContent = so ? `PENS ${so.goals.home}-${so.goals.away}` : `${matchMinute(s)}'`;
     } else {
       this.scoreEl.textContent = `TRAINING | GOALS ${s.score.home}`;
       this.clockEl.textContent = '';
@@ -625,4 +681,22 @@ export class MatchScene extends Phaser.Scene {
     this.msgEl.textContent = text;
     this.msgTimer = seconds;
   }
+}
+
+/** Full-time numbers, red on the left. */
+function statsTable(s: MatchState): string {
+  const { home, away } = s.stats;
+  const total = home.possession + away.possession || 1;
+  const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : '-');
+  const rows: [string, string | number, string | number][] = [
+    ['POSSESSION', pct(home.possession, total), pct(away.possession, total)],
+    ['SHOTS', home.shots, away.shots],
+    ['ON TARGET', home.onTarget, away.onTarget],
+    ['PASSING', pct(home.completed, home.passes), pct(away.completed, away.passes)],
+    ['CORNERS', home.corners, away.corners],
+    ['OFFSIDES', home.offsides, away.offsides],
+    ['FOULS', home.fouls, away.fouls],
+    ['CARDS', `${home.yellow}Y ${home.red}R`, `${away.yellow}Y ${away.red}R`],
+  ];
+  return `<table class="stats">${rows.map(([k, h, a]) => `<tr><td>${h}</td><td>${k}</td><td>${a}</td></tr>`).join('')}</table>`;
 }

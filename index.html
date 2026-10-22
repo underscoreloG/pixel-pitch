@@ -26,6 +26,15 @@
       #help { position: fixed; bottom: 8px; left: 12px; right: 12px; width: fit-content; margin: 0 auto; box-sizing: border-box; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; padding: 7px 12px 6px; background: rgba(0, 0, 0, 0.5); font-size: 7px; line-height: 13px; opacity: 0.85; pointer-events: none; }
       #help[hidden] { display: none; }
       #help span { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+      @media (max-height: 460px) { #radar { width: 112px; height: 73px; } #score, #clock { font-size: 11px; padding: 6px 10px; } }
+      #touch { position: fixed; inset: 0; pointer-events: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+      #touch[hidden] { display: none; }
+      #touch .stick { position: absolute; left: max(16px, env(safe-area-inset-left)); bottom: 20px; width: 128px; height: 128px; border-radius: 50%; background: rgba(0, 0, 0, 0.28); border: 2px solid rgba(244, 244, 232, 0.35); pointer-events: auto; touch-action: none; }
+      #touch .knob { position: absolute; left: 39px; top: 39px; width: 50px; height: 50px; border-radius: 50%; background: rgba(244, 244, 232, 0.55); pointer-events: none; }
+      #touch .pad { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: 18px; display: grid; grid-template-columns: repeat(3, 58px); gap: 10px; pointer-events: auto; }
+      #touch button { font-family: inherit; font-size: 8px; width: 58px; height: 58px; border-radius: 50%; border: 2px solid rgba(244, 244, 232, 0.45); background: rgba(0, 0, 0, 0.35); color: #f4f4e8; touch-action: none; padding: 0; }
+      #touch button.on { background: rgba(244, 211, 94, 0.55); color: #0d130d; }
+      #touch .pause { position: absolute; top: 12px; left: 12px; width: 40px; height: 40px; border-radius: 8px; pointer-events: auto; }
       #radar { position: fixed; top: 12px; right: 12px; width: 168px; height: 109px; opacity: 0.85; image-rendering: pixelated; }
       #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(6, 12, 6, 0.62); }
       #menu[hidden] { display: none; }
@@ -44,6 +53,12 @@
       #menu .keys span { white-space: nowrap; display: flex; align-items: center; gap: 6px; }
       #menu .keys kbd { font-size: 8px; }
       #menu .tips { font-size: 8px; line-height: 16px; opacity: 0.75; margin: 0 0 18px; text-align: left; }
+      #menu .pens { font-size: 10px; color: #f4f4e8; }
+      #menu .stats { border-collapse: collapse; margin: -8px auto 22px; font-size: 9px; }
+      #menu .stats td { padding: 4px 10px; text-align: center; }
+      #menu .stats td:nth-child(2) { opacity: 0.7; font-size: 8px; }
+      #menu .stats td:first-child { color: #f08070; }
+      #menu .stats td:last-child { color: #80a8f0; }
     </style>
   </head>
   <body>

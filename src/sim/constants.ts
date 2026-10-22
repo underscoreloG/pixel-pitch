@@ -45,6 +45,15 @@ export const MAX_CONTROL_HEIGHT = 0.5;
 export const MAX_CONTROL_REL_SPEED = 11;
 export const KICK_RADIUS = 1.0;
 export const MAX_KICK_HEIGHT = 1.2;
+/** Headers: the ball within this reach (m, on the ground plane) and between these heights. */
+export const HEADER_REACH = 0.75;
+export const HEADER_MIN_Z = 1.5;
+export const HEADER_MAX_Z = 2.45;
+/** A ball up to chest height, not too fast, can be killed with the chest or thigh. */
+export const CHEST_CONTROL_Z = 1.5;
+export const CHEST_MAX_SPEED = 9;
+/** Seconds a heading player is in the air. */
+export const HEADER_TIME = 0.45;
 export const CHARGE_TIME = 0.8;
 export const MIN_KICK_POWER = 0.1;
 export const KICK_BUFFER_TIME = 0.25;
@@ -83,6 +92,8 @@ export const OUT_PAUSE = 1;
 export const THROW_HEIGHT = 2;
 /** Extra seconds allowed past full time to finish an attack. */
 export const MAX_ADDED_TIME = 10;
+/** Half-time, and the pause before extra time. */
+export const BREAK_PAUSE = 3;
 
 // Teams, tackles, fouls
 export const PLAYER_RADIUS = 0.35;
@@ -114,7 +125,10 @@ export const SPIN_DECAY_AIR = 0.3;
 export const SPIN_DECAY_GROUND = 3;
 /** CPU decision interval (s), tackle success, kick error multiplier, speed factor, body-steal chance per difficulty. */
 export const AI_LEVELS = [
-  { decision: 0.35, tackle: 0.25, accuracy: 1.6, speed: 0.92, steal: 0.004 },
-  { decision: 0.22, tackle: 0.35, accuracy: 1.2, speed: 0.96, steal: 0.008 },
-  { decision: 0.15, tackle: 0.45, accuracy: 1.0, speed: 1.0, steal: 0.012 },
+  { decision: 0.35, tackle: 0.4, accuracy: 1.6, speed: 0.92, steal: 0.004 },
+  { decision: 0.22, tackle: 0.5, accuracy: 1.2, speed: 0.96, steal: 0.008 },
+  { decision: 0.15, tackle: 0.6, accuracy: 1.0, speed: 1.0, steal: 0.012 },
 ] as const;
+/** CPU players run this much slower with the ball than without it (on top of the dribble factor). */
+export const AI_DRIBBLE_PACE = 0.9;
+export const SUBS_PER_TEAM = 3;

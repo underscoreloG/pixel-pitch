@@ -3,9 +3,11 @@ import {
   AI_LEVELS,
   CENTER,
   DT,
+  AI_DRIBBLE_PACE,
   FINESSE_SPIN,
   FREE_KICK_DISTANCE,
   GOAL_WIDTH,
+  HEADER_MAX_Z,
   KICK_RADIUS,
   PENALTY_AREA_DEPTH,
   PITCH_LENGTH,
@@ -16,6 +18,8 @@ import {
   THROUGH_ARRIVAL,
 } from './constants';
 import { curlTowards, curledAim, kickBall, leadPoint, lobPowerFor, passPowerFor, receiveAt, throughSpace } from './kick';
+import { offsideLineU, offsidePosition } from './offside';
+import { speedFactor } from './squad';
 import { canKickNow, canMove, locomote } from './player';
 import { random } from './rng';
 import { standingTackle, startSlide } from './tackle';
@@ -39,8 +43,8 @@ import type { Footballer, MatchState, Team, Vec2 } from './types';
 
 /** Shared per-tick facts so 20 brains don't each recompute them. */
 export interface TickInfo {
-  /** Ball positions every 0.1 s for the next 2 s. */
-  path: Vec2[];
+  /** Ball positions (with height) every 0.1 s for the next 2 s. */
+  path: (Vec2 & { z: number })[];
   /** Per team, the outfield player who can reach the ball first. */
   chaser: Record<Team, number>;
   /** Per team, the second one (covers or supports). */
@@ -49,10 +53,10 @@ export interface TickInfo {
 
 export function computeTickInfo(s: MatchState): TickInfo {
   const b = { ...s.ball };
-  const path: Vec2[] = [{ x: b.x, y: b.y }];
+  const path: TickInfo['path'] = [{ x: b.x, y: b.y, z: b.z }];
   for (let i = 1; i <= 120; i++) {
     stepBall(b, DT);
-    if (i % 6 === 0) path.push({ x: b.x, y: b.y });
+    if (i % 6 === 0) path.push({ x: b.x, y: b.y, z: b.z });
   }
   const chaser: Record<Team, number> = { home: -1, away: -1 };
   const second: Record<Team, number> = { home: -1, away: -1 };
@@ -67,18 +71,18 @@ export function computeTickInfo(s: MatchState): TickInfo {
   return { path, chaser, second };
 }
 
-/** First sample time at which the player could be at the ball. */
-function interceptTime(p: Footballer, path: Vec2[]): number {
+/** First sample time at which the player could be at the ball (overhead balls only once they come down to head height). */
+function interceptTime(p: Footballer, path: TickInfo['path']): number {
   for (let i = 0; i < path.length; i++) {
     const t = i * 0.1;
-    if (dist(p, path[i]) <= PLAYER_SPRINT_SPEED * t + 0.6) return t;
+    if (path[i].z <= HEADER_MAX_Z && dist(p, path[i]) <= PLAYER_SPRINT_SPEED * t + 0.6) return t;
   }
   return 2 + dist(p, path[path.length - 1]) / PLAYER_SPRINT_SPEED;
 }
 
-function interceptPoint(p: Footballer, path: Vec2[]): Vec2 {
+function interceptPoint(p: Footballer, path: TickInfo['path']): Vec2 {
   for (let i = 0; i < path.length; i++) {
-    if (dist(p, path[i]) <= PLAYER_SPRINT_SPEED * i * 0.1 + 0.6) return path[i];
+    if (path[i].z <= HEADER_MAX_Z && dist(p, path[i]) <= PLAYER_SPRINT_SPEED * i * 0.1 + 0.6) return path[i];
   }
   return path[path.length - 1];
 }
@@ -100,7 +104,8 @@ export function stepAI(s: MatchState, p: Footballer, info: TickInfo, dt: number)
     !!target.sprint && d > 2,
     s.possessor === p.id,
     dt,
-    level.speed,
+    // With the ball the CPU is a step slower than its markers, so a chaser can get back at it.
+    level.speed * speedFactor(p) * (s.possessor === p.id ? AI_DRIBBLE_PACE : 1),
   );
   if (d <= stop && target.faceX !== undefined) {
     p.facingX = target.faceX;
@@ -117,7 +122,6 @@ interface Target extends Vec2 {
 }
 
 function decide(s: MatchState, p: Footballer, info: TickInfo): Target {
-  const ball = s.ball;
   const sp = s.setPiece;
 
   if (sp) {
@@ -145,16 +149,96 @@ function decide(s: MatchState, p: Footballer, info: TickInfo): Target {
       p.team !== 'home' || !!s.settings.autoplay || dist(s.players[s.controlled], carrier) > 12;
     if (info.chaser[p.team] === p.id && humanFar) return press(s, p, carrier);
     if (info.second[p.team] === p.id) return cover(p, carrier);
+    // The defender in front of a carrier running at goal steps out to meet him.
+    if (p.role === 'DF' && goalSideDefender(s, p.team, carrier) === p.id) return press(s, p, carrier);
   }
 
-  const spot = formationSpot(s, p);
-  // Strikers stay level with the last defender at most (a rough onside line).
-  if (p.role === 'FW') {
-    const line = lastDefenderU(s, other(p.team));
-    const u = Math.min(teamU(p.team, spot.x), Math.max(line, teamU(p.team, ball.x)));
-    spot.x = p.team === 'home' ? u * PITCH_LENGTH : (1 - u) * PITCH_LENGTH;
+  // A cross coming (a teammate wide in the final third, or one in the air): attack the box.
+  const run = boxRun(s, p, carrier);
+  if (run) return run;
+
+  return onside(s, p, formationSpot(s, p));
+}
+
+/**
+ * Holds a run at the offside line until the ball is played: no further forward
+ * than the second-last defender (or the ball). Without offside, strikers still
+ * stay roughly level with the last defender to keep the shape.
+ */
+function onside<T extends Vec2>(s: MatchState, p: Footballer, spot: T): T {
+  let line: number;
+  if (s.settings.offside !== false && s.settings.mode === 'match') line = offsideLineU(s, p.team) - 0.6 / PITCH_LENGTH;
+  else if (p.role === 'FW') line = Math.max(lastDefenderU(s, other(p.team)), teamU(p.team, s.ball.x));
+  else return spot;
+  const u = Math.min(teamU(p.team, spot.x), line);
+  return { ...spot, x: p.team === 'home' ? u * PITCH_LENGTH : (1 - u) * PITCH_LENGTH };
+}
+
+/** A teammate the referee would flag if he played it now. */
+function flagged(s: MatchState, mate: Footballer): boolean {
+  return s.settings.offside !== false && s.settings.mode === 'match' && offsidePosition(s, mate);
+}
+
+/** Wide in the final third: a crossing position. */
+function wide(team: Team, at: Vec2): boolean {
+  return teamU(team, at.x) > 0.7 && Math.abs(at.y - CENTER.y) > 14;
+}
+
+/**
+ * Forwards (and the winger on the far side) go to the near post, the far post
+ * and the penalty spot while a teammate is wide in the final third or his
+ * cross is in the air.
+ */
+function boxRun(s: MatchState, p: Footballer, carrier: Footballer | undefined): Target | undefined {
+  const ball = s.ball;
+  const crossing = carrier ? carrier.team === p.team && wide(p.team, carrier) : false;
+  const inFlight = !carrier && s.lastTouch === p.team && ball.z > 0.8 && teamU(p.team, ball.x) > 0.6;
+  if (!crossing && !inFlight) return undefined;
+  const side = Math.sign(ball.y - CENTER.y) || 1;
+  const farWinger = p.role === 'MF' && Math.sign(p.y - CENTER.y) === -side && Math.abs(p.slot.v - 0.5) > 0.25;
+  if (p.role !== 'FW' && !farWinger) return undefined;
+  const goalX = targetGoalX(p.team);
+  const dir = attackDir(p.team);
+  const spot =
+    farWinger
+      ? { x: goalX - dir * 11, y: CENTER.y - side * 1 }
+      : p.number === 9
+        ? { x: goalX - dir * 6, y: CENTER.y + side * 2.5 }
+        : { x: goalX - dir * 7, y: CENTER.y - side * 3.5 };
+  return onside(s, p, { ...spot, sprint: true });
+}
+
+/** The best teammate in the box to cross to, if any: the one with most room. */
+function crossTarget(s: MatchState, p: Footballer, opps: Footballer[]): { mate: Footballer; spot: Vec2 } | undefined {
+  if (!wide(p.team, p)) return undefined;
+  const dir = attackDir(p.team);
+  let best: { mate: Footballer; spot: Vec2; room: number } | undefined;
+  for (const m of active(s)) {
+    if (m.team !== p.team || m.gk || m.id === p.id || !inPenaltyArea(other(p.team), m.x, m.y) || flagged(s, m)) continue;
+    if (Math.abs(m.y - CENTER.y) > 10) continue;
+    const spot = { x: m.x + dir, y: m.y };
+    const room = Math.min(...opps.map((o) => dist(o, spot)));
+    if (!best || room > best.room) best = { mate: m, spot, room };
   }
-  return spot;
+  return best;
+}
+
+/** Nearest defender of `team` between the carrier and his own goal, once the carrier is within 35 m of it. */
+function goalSideDefender(s: MatchState, team: Team, carrier: Footballer): number {
+  const goal = { x: ownGoalX(team), y: CENTER.y };
+  const carrierToGoal = dist(carrier, goal);
+  if (carrierToGoal > 35) return -1;
+  let best = -1;
+  let bestD = 18;
+  for (const d of active(s)) {
+    if (d.team !== team || d.role !== 'DF' || !canMove(d) || dist(d, goal) > carrierToGoal) continue;
+    const gap = dist(d, carrier);
+    if (gap < bestD) {
+      bestD = gap;
+      best = d.id;
+    }
+  }
+  return best;
 }
 
 function keeperHolding(s: MatchState): boolean {
@@ -179,7 +263,7 @@ function press(s: MatchState, p: Footballer, carrier: Footballer): Target {
   const d = dist(p, carrier);
   if (p.think === 0 && p.tackleCooldown === 0) {
     p.think = level.decision;
-    if (d < TACKLE_RANGE && random(s.rng) < 0.6) standingTackle(s, p, carrier, level.tackle);
+    if (d < TACKLE_RANGE) standingTackle(s, p, carrier, level.tackle);
     else if (d > 1.5 && d < SLIDE_RANGE && behind(p, carrier) && random(s.rng) < 0.08) {
       startSlide(s, p, s.ball.x - p.x, s.ball.y - p.y);
     }
@@ -220,6 +304,22 @@ function carry(s: MatchState, p: Footballer): Target {
     const angleOk = Math.abs(p.y - CENTER.y) < toGoal * 0.8;
     if (angleOk && (toGoal < 16 || (toGoal < 25 && (pressure < 3 || random(s.rng) < 0.3)))) {
       shoot(s, p, goal, toGoal);
+      return { x: p.x, y: p.y };
+    }
+    // Wide in the final third with someone in the box: cross it, sooner if pressed or near the byline.
+    const cross = crossTarget(s, p, opps);
+    if (cross && (teamU(p.team, p.x) > 0.84 || pressure < 4 || random(s.rng) < 0.35)) {
+      const d = dist(p, cross.spot) || 1;
+      const opts = { errorMul: level.accuracy, target: cross.mate.id };
+      if (random(s.rng) < 0.4) {
+        // Whipped, bending away from the keeper.
+        const spin = curlTowards(cross.spot.x - p.x, cross.spot.y - p.y, -attackDir(p.team), true) * FINESSE_SPIN * 0.8;
+        const power = lobPowerFor(d, true);
+        const aim = curledAim(s, p, 'lob', power, spin, cross.spot);
+        kickBall(s, p, 'lob', power, aim.dirX, aim.dirY, { ...opts, finesse: true, spin });
+      } else {
+        kickBall(s, p, 'lob', lobPowerFor(d), (cross.spot.x - p.x) / d, (cross.spot.y - p.y) / d, opts);
+      }
       return { x: p.x, y: p.y };
     }
     const pass = bestPass(s, p, opps);
@@ -295,14 +395,14 @@ interface PassOption {
 function bestPass(s: MatchState, p: Footballer, opps: Footballer[]): PassOption | undefined {
   let best: PassOption | undefined;
   for (const mate of active(s)) {
-    if (mate.team !== p.team || mate.id === p.id || mate.gk || !canMove(mate)) continue;
+    if (mate.team !== p.team || mate.id === p.id || mate.gk || !canMove(mate) || flagged(s, mate)) continue;
     const d = dist(p, mate);
     if (d < 6 || d > 45) continue;
     const lead = leadPoint(p, mate, 16);
     const progress = (teamU(p.team, lead.x) - teamU(p.team, p.x)) * PITCH_LENGTH;
     const space = Math.min(10, ...opps.map((o) => dist(o, lead)));
     const lane = Math.min(10, ...opps.map((o) => segmentDistance(o, p, lead)));
-    const laneBlocked = lane < 2.5;
+    const laneBlocked = lane < 1.8;
     const marked = space < 3 ? -6 : 0;
     const score = progress * 0.5 + space + marked - d * 0.05 + (laneBlocked ? -8 : lane * 0.4);
     if (!best || score > best.score) best = { mate, lead, score, laneBlocked };
@@ -315,7 +415,7 @@ function bestPass(s: MatchState, p: Footballer, opps: Footballer[]): PassOption 
     if (race < 1.5 || tLane < 2.5) continue;
     const tProgress = (teamU(p.team, gap.x) - teamU(p.team, p.x)) * PITCH_LENGTH;
     const tScore = tProgress * 0.5 + Math.min(8, race * 1.5) - 3 - dist(p, gap) * 0.05 + tLane * 0.4;
-    if (tScore > best.score) best = { mate, lead: gap, score: tScore, laneBlocked: false, through: true };
+    if (!best || tScore > best.score) best = { mate, lead: gap, score: tScore, laneBlocked: false, through: true };
   }
   return best;
 }

@@ -14,6 +14,9 @@ export interface Settings {
   /** How much of the pitch the camera shows. */
   camera: 'close' | 'normal' | 'wide';
   showHelp: boolean;
+  offside: boolean;
+  /** What a drawn match goes to. */
+  ifDrawn: 'final' | 'extra-time' | 'penalties';
 }
 
 const KEY = 'pixel-pitch:settings';
@@ -27,6 +30,8 @@ export const DEFAULTS: Settings = {
   assist: true,
   camera: 'normal',
   showHelp: true,
+  offside: true,
+  ifDrawn: 'final',
 };
 
 export function loadSettings(): Settings {

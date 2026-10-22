@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { predictCrossing, stepBall } from './ball';
-import { CENTER, DT, FINESSE_SPIN, FOUL_PAUSE, GOAL_HEIGHT, MIN_KICK_POWER, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
+import { BREAK_PAUSE, CENTER, DT, FINESSE_SPIN, FOUL_PAUSE, GOAL_HEIGHT, MIN_KICK_POWER, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
 import { findPassTarget, planKick, resolveHumanKick } from './kick';
-import { NO_INPUT, createMatch, kickoff, stepMatch } from './match';
+import { NO_INPUT, createMatch, kickoff, matchMinute, periodEnd, stepMatch } from './match';
+import { decided } from './shootout';
+import { queueSub, speedFactor, subsLeft, tire } from './squad';
 import { commitFoul } from './tackle';
 import type { Ball, Footballer, InputFrame, MatchSettings, MatchState } from './types';
 
@@ -451,7 +453,8 @@ describe('defending and assisted kicks', () => {
 describe('through balls and curl', () => {
   it('a through ball goes into the space ahead of the runner, and he gets there first', () => {
     for (let seed = 1; seed <= 5; seed++) {
-      const s = createMatch(seed, MATCH);
+      // One defender only: with offside on, the runner would be past the second-last opponent.
+      const s = createMatch(seed, { ...MATCH, offside: false });
       const passer = s.players.find((p) => p.team === 'home' && p.number === 10)!;
       const runner = s.players.find((p) => p.team === 'home' && p.number === 9)!;
       const blue = s.players.find((p) => p.team === 'away' && p.number === 5)!;
@@ -459,7 +462,8 @@ describe('through balls and curl', () => {
       only(s, passer, runner, blue);
       Object.assign(passer, { x: 55, y: 30, facingX: 1, facingY: 0 });
       Object.assign(runner, { x: 70, y: 36, vx: 0, vy: 0 });
-      Object.assign(blue, { x: 72, y: 26, vx: 0, vy: 0, think: 99 });
+      // A defender a few metres goal-side of the passer's line, beaten by the ball in behind.
+      Object.assign(blue, { x: 67, y: 24, vx: 0, vy: 0, think: 99 });
       Object.assign(s.ball, ball({ x: 55.6, y: 30 }));
       s.possessor = passer.id;
       const n = Math.hypot(15, 6);
@@ -524,6 +528,178 @@ describe('through balls and curl', () => {
     }
     expect(kinds.has('through')).toBe(true);
     expect(curled).toBeGreaterThan(0);
+  });
+});
+
+describe('offside', () => {
+  /** Red #10 passes to #9 with two blue defenders and the keeper; #9 stands `beyond` metres past the last outfield defender. */
+  function passTo9(beyond: number, settings: Partial<MatchSettings> = {}): MatchState {
+    const s = createMatch(4, { ...MATCH, ...settings });
+    const passer = s.players.find((p) => p.team === 'home' && p.number === 10)!;
+    const nine = s.players.find((p) => p.team === 'home' && p.number === 9)!;
+    const [d1, d2] = s.players.filter((p) => p.team === 'away' && p.role === 'DF');
+    only(s, passer, nine, d1, d2, keeper(s, 'away'));
+    s.controlled = passer.id;
+    Object.assign(passer, { x: 60, y: 34, facingX: 1, facingY: 0 });
+    Object.assign(d1, { x: 80, y: 28, think: 99 });
+    Object.assign(d2, { x: 80, y: 42, think: 99 });
+    Object.assign(nine, { x: 80 + beyond, y: 34, vx: 0, vy: 0 });
+    Object.assign(s.ball, ball({ x: 60.6, y: 34 }));
+    s.possessor = passer.id;
+    press(s, 'pass', 0.1, { moveX: 1, moveY: 0 });
+    return s;
+  }
+
+  it('a pass to a player beyond the second-last defender is offside: free kick where he plays it', () => {
+    const s = passTo9(4);
+    expect(s.offside?.ids).toContain(human(s).id);
+    run(s, 3);
+    expect(s.events.some((e) => e.type === 'offside')).toBe(true);
+    expect(s.setPiece?.type).toBe('free-kick');
+    expect(s.setPiece?.team).toBe('away');
+    // Where he played it, well upfield of the pass.
+    expect(s.setPiece!.x).toBeGreaterThan(70);
+  });
+
+  it('level is onside, and so is running past the line after the pass', () => {
+    const s = passTo9(-0.2);
+    expect(s.offside).toBeNull();
+    run(s, 3);
+    expect(s.events.some((e) => e.type === 'offside')).toBe(false);
+  });
+
+  it('can be switched off', () => {
+    const s = passTo9(4, { offside: false });
+    run(s, 3);
+    expect(s.events.some((e) => e.type === 'offside')).toBe(false);
+    expect(s.possessor).toBe(human(s).id);
+  });
+
+  it('nobody is offside from a throw-in', () => {
+    const s = createMatch(5, MATCH);
+    const thrower = s.players.find((p) => p.team === 'home' && p.number === 7)!;
+    const nine = s.players.find((p) => p.team === 'home' && p.number === 9)!;
+    const [d1, d2] = s.players.filter((p) => p.team === 'away' && p.role === 'DF');
+    only(s, thrower, nine, d1, d2, keeper(s, 'away'));
+    Object.assign(d1, { x: 75, y: 30, think: 99 });
+    Object.assign(d2, { x: 75, y: 40, think: 99 });
+    Object.assign(nine, { x: 82, y: 6 });
+    s.phase = 'out';
+    s.phaseTimer = 0.01;
+    s.restart = { type: 'throw-in', team: 'home', x: 78, y: 0.05 };
+    run(s, 0.6);
+    press(s, 'pass', 0.1, { moveX: 0.6, moveY: 0.8 });
+    expect(s.offside).toBeNull();
+  });
+
+  it('the CPU mostly stays onside in a match', () => {
+    const s = createMatch(12, { mode: 'match', duration: 300, difficulty: 1, autoplay: true });
+    let flags = 0;
+    while (s.phase !== 'full-time') {
+      stepMatch(s, NO_INPUT);
+      flags += s.events.filter((e) => e.type === 'offside' && e.tick === s.tick - 1).length;
+      s.events.length = 0;
+    }
+    expect(flags).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('squads: ratings, stamina, substitutions, stats', () => {
+  it('players differ a little, the same way for the same seed', () => {
+    const a = createMatch(7, MATCH);
+    const b = createMatch(7, MATCH);
+    const pace = a.players.filter((p) => !p.gk).map((p) => p.ratings.pace);
+    expect(Math.max(...pace)).toBeLessThan(1.07);
+    expect(Math.min(...pace)).toBeGreaterThan(0.93);
+    expect(new Set(pace).size).toBeGreaterThan(10);
+    expect(b.players.map((p) => p.ratings)).toEqual(a.players.map((p) => p.ratings));
+  });
+
+  it('sprinting tires a player and makes him slower; standing gets some back', () => {
+    const s = createMatch(1, MATCH);
+    const p = s.players.find((q) => q.team === 'away' && q.number === 8)!;
+    const fresh = speedFactor(p);
+    Object.assign(p, { vx: 9, vy: 0 });
+    for (let i = 0; i < 60 / DT; i++) tire(s, p, DT);
+    expect(p.stamina).toBeLessThan(0.7);
+    expect(speedFactor(p)).toBeLessThan(fresh);
+    const tired = p.stamina;
+    Object.assign(p, { vx: 0, vy: 0 });
+    for (let i = 0; i < 20 / DT; i++) tire(s, p, DT);
+    expect(p.stamina).toBeGreaterThan(tired);
+  });
+
+  it('a substitution waits for the next stoppage, brings on a fresh player, and there are only three', () => {
+    const s = createMatch(2, MATCH);
+    run(s, 2, NO_INPUT);
+    const tiredOnes = s.players.filter((p) => p.team === 'home' && !p.gk).slice(0, 4);
+    for (const p of tiredOnes) p.stamina = 0.4;
+    for (const p of tiredOnes) queueSub(s, 'home', p.id);
+    expect(s.subs.home.queue.length).toBe(3);
+    // Open play: nothing yet.
+    s.setPiece = null;
+    s.phase = 'play';
+    stepMatch(s, NO_INPUT);
+    expect(s.subs.home.made).toBe(0);
+    // The ball goes out: the changes are made.
+    s.phase = 'out';
+    s.phaseTimer = 1;
+    stepMatch(s, NO_INPUT);
+    expect(s.subs.home.made).toBe(3);
+    expect(subsLeft(s, 'home')).toBe(0);
+    expect(tiredOnes.slice(0, 3).every((p) => p.stamina === 1 && p.number >= 12)).toBe(true);
+    expect(queueSub(s, 'home', tiredOnes[3].id)).toBe(false);
+  });
+
+  it('over a CPU match: tired players are changed, and the stats add up', () => {
+    const s = createMatch(5, { mode: 'match', duration: 240, difficulty: 1, autoplay: true });
+    let subs = 0;
+    let shots = 0;
+    while (s.phase !== 'full-time') {
+      stepMatch(s, NO_INPUT);
+      for (const e of s.events) {
+        if (e.tick !== s.tick - 1) continue;
+        if (e.type === 'sub') subs++;
+        if (e.type === 'kick' && e.kick === 'shot') shots++;
+      }
+      s.events.length = 0;
+    }
+    expect(subs).toBeGreaterThanOrEqual(2);
+    const { home, away } = s.stats;
+    expect(home.shots + away.shots).toBe(shots);
+    expect(home.onTarget + away.onTarget).toBeGreaterThanOrEqual(s.score.home + s.score.away);
+    const possession = home.possession / (home.possession + away.possession);
+    expect(possession).toBeGreaterThan(0.2);
+    expect(possession).toBeLessThan(0.8);
+    expect(home.completed).toBeLessThanOrEqual(home.passes);
+    expect(home.completed / home.passes).toBeGreaterThan(0.4);
+  });
+});
+
+describe('goal kicks', () => {
+  it('the keeper kicks it well upfield, where his side usually wins it', () => {
+    let kept = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const s = createMatch(seed, { ...MATCH, autoplay: true });
+      run(s, 3);
+      s.possessor = -1;
+      s.setPiece = null;
+      s.phase = 'out';
+      s.phaseTimer = 0.01;
+      s.restart = { type: 'goal-kick', team: 'home', x: 5.5, y: CENTER.y };
+      // Wait for the kick, then for someone to control it.
+      let kickedFrom = NaN;
+      for (let i = 0; i < 8 / DT && (Number.isNaN(kickedFrom) || s.possessor < 0); i++) {
+        stepMatch(s, NO_INPUT);
+        if (Number.isNaN(kickedFrom) && s.events.some((e) => e.type === 'kick' && e.playerId === keeper(s, 'home').id)) {
+          kickedFrom = keeper(s, 'home').x;
+        }
+        s.events.length = 0;
+      }
+      expect(s.ball.x - kickedFrom).toBeGreaterThan(20);
+      if (s.possessor >= 0 && s.players[s.possessor].team === 'home') kept++;
+    }
+    expect(kept).toBeGreaterThanOrEqual(6);
   });
 });
 
@@ -602,8 +778,11 @@ describe('taking set pieces', () => {
 });
 
 describe('penalties', () => {
-  /** Fouls the attacking side's #9 in the box, waits for the penalty, takes it (human) or lets the CPU, returns the outcome. */
-  function penalty(seed: number, team: 'home' | 'away', stick = { moveX: 1, moveY: 0.22 }, charge = 0.7): string {
+  /**
+   * Fouls the attacking side's #9 in the box, waits for the penalty, takes it (human) or lets the CPU
+   * (with the human's keeper diving the way `keeperStick` is held), returns the outcome.
+   */
+  function penalty(seed: number, team: 'home' | 'away', stick = { moveX: 1, moveY: 0.22 }, charge = 0.7, keeperStick = 0): string {
     const s = createMatch(seed, MATCH);
     s.setPiece = null;
     const att = s.players.find((p) => p.team === team && p.number === 9)!;
@@ -620,7 +799,7 @@ describe('penalties', () => {
       press(s, 'shoot', charge, stick);
     }
     for (let i = 0; i < 4 / DT; i++) {
-      stepMatch(s, NO_INPUT);
+      stepMatch(s, { ...NO_INPUT, moveY: keeperStick });
       for (const e of s.events) {
         if (e.type === 'goal') return 'goal';
         if (e.type === 'save' || e.type === 'catch') return 'saved';
@@ -640,10 +819,81 @@ describe('penalties', () => {
     expect(r).toBeLessThan(0.95);
   });
 
-  it('CPU penalties are scored at a similar rate', () => {
-    const r = rate(seeds.map((seed) => penalty(seed, 'away')));
-    expect(r).toBeGreaterThan(0.55);
-    expect(r).toBeLessThan(0.95);
+  it('on a CPU penalty your keeper dives the way you hold the stick, and saves some', () => {
+    const r = rate(seeds.map((seed) => penalty(seed, 'away', undefined, undefined, -1)));
+    expect(r).toBeGreaterThan(0.3);
+    expect(r).toBeLessThan(0.85);
+    // Standing up in the middle mostly gets beaten.
+    expect(rate(seeds.map((seed) => penalty(seed, 'away')))).toBeGreaterThan(r);
+  });
+});
+
+describe('halves, extra time and shootouts', () => {
+  const CUP: MatchSettings = { mode: 'match', duration: 60, difficulty: 1, autoplay: true };
+  const until = (s: MatchState, type: string, max = 400) => {
+    for (let i = 0; i < max / DT; i++) {
+      stepMatch(s, NO_INPUT);
+      const hit = s.events.some((e) => e.type === type && e.tick === s.tick - 1);
+      s.events.length = 0;
+      if (hit) return true;
+    }
+    return false;
+  };
+
+  it('half-time at 45 minutes, then the other side kicks off the second half from 45', () => {
+    const s = createMatch(1, CUP);
+    expect(until(s, 'half-time')).toBe(true);
+    expect(matchMinute(s)).toBe(45);
+    expect(until(s, 'kickoff')).toBe(true);
+    expect(s.period).toBe(2);
+    expect(s.kickoffTeam).toBe('away');
+    expect(s.clock).toBeCloseTo(30, 1);
+    expect(until(s, 'full-time')).toBe(true);
+    expect(matchMinute(s)).toBe(90);
+  });
+
+  it('a draw goes to extra time, then to penalties, and the shootout finds a winner', () => {
+    const s = createMatch(2, { ...CUP, ifDrawn: 'extra-time' });
+    // Late in the second half, level.
+    Object.assign(s, { period: 2, clock: 59.9 });
+    s.score = { home: 1, away: 1 };
+    s.setPiece = null;
+    Object.assign(s.ball, ball({ x: CENTER.x, y: CENTER.y }));
+    expect(until(s, 'extra-time', 15)).toBe(true);
+    expect(until(s, 'kickoff', 10)).toBe(true);
+    expect(s.period).toBe(3);
+    Object.assign(s, { period: 4, clock: periodEnd(s) + 20 - 0.1 });
+    s.score = { home: 2, away: 2 };
+    s.setPiece = null;
+    Object.assign(s.ball, ball({ x: CENTER.x, y: CENTER.y }));
+    expect(until(s, 'shootout', 15)).toBe(true);
+    expect(until(s, 'full-time', 200)).toBe(true);
+    const so = s.shootout!;
+    expect(so.winner).not.toBeNull();
+    expect(so.goals.home).not.toBe(so.goals.away);
+    expect(so.taken.home).toBeGreaterThanOrEqual(3);
+    expect(Math.abs(so.taken.home - so.taken.away)).toBeLessThanOrEqual(1);
+    // The match score stays as it was.
+    expect(s.score).toEqual({ home: 2, away: 2 });
+  });
+
+  it('a drawn match with the default rule just ends', () => {
+    const s = createMatch(3, CUP);
+    Object.assign(s, { period: 2, clock: 59.9 });
+    s.score = { home: 0, away: 0 };
+    s.setPiece = null;
+    Object.assign(s.ball, ball({ x: CENTER.x, y: CENTER.y }));
+    expect(until(s, 'full-time', 15)).toBe(true);
+    expect(s.shootout).toBeNull();
+  });
+
+  it('shootout scoring: stops once a side cannot catch up, sudden death after five each', () => {
+    expect(decided({ home: 3, away: 0 }, { home: 3, away: 3 })).toBe('home');
+    expect(decided({ home: 2, away: 0 }, { home: 3, away: 2 })).toBeNull();
+    expect(decided({ home: 4, away: 3 }, { home: 5, away: 5 })).toBe('home');
+    expect(decided({ home: 4, away: 4 }, { home: 5, away: 5 })).toBeNull();
+    expect(decided({ home: 5, away: 4 }, { home: 6, away: 5 })).toBeNull();
+    expect(decided({ home: 5, away: 4 }, { home: 6, away: 6 })).toBe('home');
   });
 });
 
@@ -713,9 +963,11 @@ describe('tackles, fouls and cards', () => {
 });
 
 describe('match flow', () => {
-  it('match mode ends at full time', () => {
+  it('match mode ends at full time, after a half-time break', () => {
     const s = createMatch(1, { mode: 'match', duration: 2, difficulty: 1 });
-    run(s, 2.5);
+    run(s, 1.5);
+    expect(s.phase).toBe('break');
+    run(s, BREAK_PAUSE + 1.5);
     expect(s.phase).toBe('full-time');
   });
 

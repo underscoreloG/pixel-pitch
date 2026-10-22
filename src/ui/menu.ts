@@ -7,7 +7,21 @@ import { type Settings, saveSettings } from './settings';
 export const GAME_TITLE = 'PIXEL PITCH';
 
 export type Mode = 'match' | 'training';
-type Screen = 'main' | 'options' | 'pause' | 'result' | 'controls';
+type Screen = 'main' | 'options' | 'pause' | 'result' | 'controls' | 'subs';
+type Command = 'up' | 'down' | 'left' | 'right' | 'select' | 'back' | 'pause';
+
+const KEY_COMMANDS: Record<string, Command> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  Enter: 'select',
+  ' ': 'select',
+  s: 'select',
+  S: 'select',
+  Escape: 'back',
+  Backspace: 'back',
+};
 
 const ARROWS = ['left', 'up', 'down', 'right'].map((d) => `<kbd class="arr ${d}"></kbd>`).join('');
 /** Keyboard controls, shown on the CONTROLS screen. */
@@ -36,6 +50,11 @@ export interface MenuActions {
   restart(): void;
   quit(): void;
   settingsChanged(s: Settings): void;
+  /** Red's outfield players for the substitutions screen; null outside a match. */
+  squad(): { id: number; label: string }[] | null;
+  subsLeft(): number;
+  /** Ask for a change at the next stoppage; false if it can't be made. */
+  substitute(id: number): boolean;
 }
 
 interface Item {
@@ -47,6 +66,7 @@ interface Item {
 const LENGTHS: Settings['matchMinutes'][] = [3, 5, 8];
 const LEVELS = ['EASY', 'NORMAL', 'HARD'];
 const CAMERAS: Settings['camera'][] = ['close', 'normal', 'wide'];
+const IF_DRAWN: Settings['ifDrawn'][] = ['final', 'extra-time', 'penalties'];
 
 export class Menu {
   private root = document.getElementById('menu')!;
@@ -54,6 +74,9 @@ export class Menu {
   private items: Item[] = [];
   private index = 0;
   private resultText = '';
+  private padHeld = [false, false, false];
+  private padDir: Command | null = null;
+  private padRepeatAt = 0;
   /** True while a match or training session is in progress (Esc pauses it). */
   inGame = false;
 
@@ -77,6 +100,7 @@ export class Menu {
       }
     });
     this.show('main');
+    requestAnimationFrame(this.pollPad);
   }
 
   get isOpen(): boolean {
@@ -109,6 +133,16 @@ export class Menu {
         ];
       case 'controls':
         return [{ label: () => 'BACK', select: () => this.back() }];
+      case 'subs':
+        return [
+          ...(this.actions.squad() ?? []).map((p) => ({
+            label: () => p.label,
+            select: () => {
+              if (this.actions.substitute(p.id)) this.show('pause');
+            },
+          })),
+          { label: () => 'BACK', select: () => this.back() },
+        ];
       case 'options':
         return [
           { label: () => `SOUND      ${s.sound ? 'ON' : 'OFF'}`, change: () => set('sound', !s.sound) },
@@ -117,6 +151,11 @@ export class Menu {
             label: () => `MATCH      ${s.matchMinutes} MIN`,
             change: (d) => set('matchMinutes', cycle(LENGTHS, s.matchMinutes, d)),
           },
+          {
+            label: () => `IF DRAWN   ${s.ifDrawn.replace('-', ' ').toUpperCase()}`,
+            change: (d) => set('ifDrawn', cycle(IF_DRAWN, s.ifDrawn, d)),
+          },
+          { label: () => `OFFSIDE    ${s.offside ? 'ON' : 'OFF'}`, change: () => set('offside', !s.offside) },
           {
             label: () => `DIFFICULTY ${LEVELS[s.difficulty]}`,
             change: (d) => set('difficulty', ((s.difficulty + d + 3) % 3) as Settings['difficulty']),
@@ -134,6 +173,9 @@ export class Menu {
         return [
           { label: () => 'RESUME', select: () => this.go(() => this.actions.resume()) },
           { label: () => 'RESTART', select: () => this.go(() => this.actions.restart()) },
+          ...(this.actions.squad()
+            ? [{ label: () => `SUBS (${this.actions.subsLeft()} LEFT)`, select: () => this.show('subs') }]
+            : []),
           { label: () => 'CONTROLS', select: () => this.show('controls') },
           { label: () => 'OPTIONS', select: () => this.show('options') },
           { label: () => 'MAIN MENU', select: () => this.toMain() },
@@ -159,7 +201,9 @@ export class Menu {
   }
 
   private back(): void {
-    if (this.screen === 'options' || this.screen === 'controls') this.show(this.inGame ? 'pause' : 'main');
+    if (this.screen === 'options' || this.screen === 'controls' || this.screen === 'subs') {
+      this.show(this.inGame ? 'pause' : 'main');
+    }
     else if (this.screen === 'pause') this.go(() => this.actions.resume());
   }
 
@@ -174,43 +218,76 @@ export class Menu {
   }
 
   private onKey(e: KeyboardEvent): void {
+    const cmd = KEY_COMMANDS[e.key];
+    if (!cmd || !this.command(cmd)) return;
+    e.preventDefault();
+  }
+
+  /** One menu command from the keyboard or a gamepad. Returns false if it did nothing. */
+  private command(cmd: Command): boolean {
     if (!this.screen) {
-      if (e.key === 'Escape' && this.inGame) {
+      if ((cmd === 'back' || cmd === 'pause') && this.inGame) {
         this.actions.pause();
         this.show('pause');
+        return true;
       }
-      return;
+      return false;
     }
     sfx.unlock();
-    switch (e.key) {
-      case 'ArrowUp':
+    switch (cmd) {
+      case 'up':
         this.index = (this.index - 1 + this.items.length) % this.items.length;
         sfx.blip();
         break;
-      case 'ArrowDown':
+      case 'down':
         this.index = (this.index + 1) % this.items.length;
         sfx.blip();
         break;
-      case 'ArrowLeft':
-      case 'ArrowRight':
-        if (this.items[this.index]?.change) this.activate(e.key === 'ArrowLeft' ? -1 : 1);
+      case 'left':
+      case 'right':
+        if (this.items[this.index]?.change) this.activate(cmd === 'left' ? -1 : 1);
         break;
-      case 'Enter':
-      case ' ':
-      case 's':
-      case 'S':
+      case 'select':
         this.activate(1);
         break;
-      case 'Escape':
-      case 'Backspace':
+      case 'back':
         this.back();
         break;
-      default:
-        return;
+      case 'pause':
+        if (this.screen === 'pause') this.go(() => this.actions.resume());
+        else return false;
+        break;
     }
-    e.preventDefault();
     this.render();
+    return true;
   }
+
+  /**
+   * The first gamepad drives the menus too: d-pad or stick to move (held
+   * directions repeat), A selects, B goes back, Start pauses and resumes.
+   */
+  private pollPad = (now: number): void => {
+    requestAnimationFrame(this.pollPad);
+    const pad = navigator.getGamepads?.()[0];
+    if (!pad) return;
+    const btn = (i: number) => (pad.buttons[i]?.value ?? 0) > 0.5;
+    const sx = pad.axes[0] ?? 0;
+    const sy = pad.axes[1] ?? 0;
+    const dir: Command | null =
+      btn(12) || sy < -0.6 ? 'up' : btn(13) || sy > 0.6 ? 'down' : btn(14) || sx < -0.6 ? 'left' : btn(15) || sx > 0.6 ? 'right' : null;
+    const pressed = [0, 1, 9].map(btn);
+    const edge = (i: number) => pressed[i] && !this.padHeld[i];
+    // Directions and buttons only count in a menu; Start also pauses a match.
+    if (this.screen && dir && (dir !== this.padDir || now >= this.padRepeatAt)) {
+      this.command(dir);
+      this.padRepeatAt = now + (dir === this.padDir ? 140 : 380);
+    }
+    this.padDir = dir;
+    if (this.screen && edge(0)) this.command('select');
+    else if (this.screen && edge(1)) this.command('back');
+    else if (edge(2)) this.command('pause');
+    this.padHeld = pressed;
+  };
 
   private heading(): string {
     switch (this.screen) {
@@ -224,6 +301,8 @@ export class Menu {
       }
       case 'pause':
         return '<h2>PAUSED</h2>';
+      case 'subs':
+        return `<h2>SUBSTITUTIONS</h2><p class="tips">Pick who comes off (${this.actions.subsLeft()} left).<br />The change is made at the next stoppage.</p>`;
       default:
         return `<h2>FULL TIME</h2><p class="result">${this.resultText}</p>`;
     }
@@ -245,7 +324,7 @@ export class Menu {
     const hint =
       this.screen === 'options'
         ? 'LEFT/RIGHT CHANGE | ESC BACK'
-        : this.screen === 'controls'
+        : this.screen === 'controls' || this.screen === 'subs'
           ? 'ESC BACK'
         : 'ARROWS MOVE | ENTER SELECT' + (this.screen === 'pause' ? ' | ESC RESUME' : '');
     const version = this.screen === 'main' ? `<p class="version">v${__APP_VERSION__}</p>` : '';

@@ -2,6 +2,7 @@ import { stepBall } from './ball';
 import { computeTickInfo, stepAI } from './ai';
 import {
   BALL_RADIUS,
+  BREAK_PAUSE,
   CENTER,
   DT,
   FREE_KICK_DISTANCE,
@@ -22,7 +23,12 @@ import {
   SET_PIECE_DELAY,
 } from './constants';
 import { emit } from './events';
+import { resolveHeaders } from './header';
+import { startShootout, stepShootout } from './shootout';
+import { NEUTRAL, makeSubs, rest, rollRatings, tire } from './squad';
+import { countTick, emptyStats } from './stats';
 import { stepKeeper } from './keeper';
+import { offsideOffender } from './offside';
 import { canMove, coast, createFootballer, nearestHome, resolvePossession, separate, stepHuman, tickTimers } from './player';
 import { createReferee, stepReferee } from './referee';
 import { stepSlide } from './tackle';
@@ -79,6 +85,13 @@ export function createMatch(seed: number, settings: MatchSettings = TRAINING): M
     passTarget: -1,
     passStick: null,
     passSpace: null,
+    offside: null,
+    period: 1,
+    firstKickoff: 'home',
+    shootout: null,
+    stick: { x: 0, y: 0 },
+    subs: { home: { made: 0, queue: [] }, away: { made: 0, queue: [] } },
+    stats: emptyStats(),
     lastTouch: 'home',
     lastToucherId: -1,
     referee: createReferee(),
@@ -91,6 +104,7 @@ export function createMatch(seed: number, settings: MatchSettings = TRAINING): M
     foul: null,
     events: [],
   };
+  for (const p of players) p.ratings = p.gk ? { ...NEUTRAL } : rollRatings(seed, p.id, p.role);
   kickoff(s, 'home');
   return s;
 }
@@ -129,6 +143,14 @@ export function kickoff(s: MatchState, team: Team): void {
 /** Advances the match by one fixed tick. Pure function of (state, input): no clock, no Math.random. */
 export function stepMatch(s: MatchState, input: InputFrame): void {
   for (const p of s.players) tickTimers(p, DT);
+  if (!s.settings.autoplay) s.stick = { x: input.moveX, y: input.moveY };
+
+  if (s.phase === 'shootout') {
+    stepShootout(s, input);
+    stepReferee(s, DT);
+    s.tick++;
+    return;
+  }
 
   if (s.phase === 'full-time') {
     for (const p of active(s)) coast(p, DT);
@@ -144,6 +166,9 @@ export function stepMatch(s: MatchState, input: InputFrame): void {
     const taker = byId(s, sp.takerId);
     if (taker && dist(taker, sp) < 1.3) sp.timer = Math.max(0, sp.timer - DT);
   }
+
+  for (const p of active(s)) tire(s, p, DT);
+  if (s.phase !== 'play' || s.setPiece) makeSubs(s);
 
   const auto = !!s.settings.autoplay;
   if (!auto) stepHuman(s, input, DT);
@@ -162,7 +187,8 @@ export function stepMatch(s: MatchState, input: InputFrame): void {
     if (s.phase === 'goal') keepInNet(s);
     s.phaseTimer -= DT;
     if (s.phaseTimer <= 0) {
-      if (timeIsUp(s)) endMatch(s);
+      if (s.phase === 'break') startPeriod(s);
+      else if (timeIsUp(s)) endPeriod(s);
       else if (s.phase === 'goal') kickoff(s, s.kickoffTeam);
       else if (s.phase === 'foul') restartFromFoul(s);
       else restartPlay(s);
@@ -171,13 +197,21 @@ export function stepMatch(s: MatchState, input: InputFrame): void {
     return;
   }
 
+  resolveHeaders(s);
   resolvePossession(s);
+  countTick(s);
+  const offender = offsideOffender(s);
+  if (offender) {
+    callOffside(s, offender);
+    s.tick++;
+    return;
+  }
   const prev = { x: s.ball.x, y: s.ball.y, z: s.ball.z, vz: s.ball.vz };
   if (!s.players.some((p) => p.gk?.state === 'holding')) stepBall(s.ball, DT);
   if (prev.vz < -2 && s.ball.vz > 0) emit(s, 'bounce', { power: Math.min(1, -prev.vz / 10) });
   checkGoalLines(s, prev);
   if (s.phase === 'play') checkTouchlines(s);
-  if (s.phase === 'play') checkFullTime(s);
+  if (s.phase === 'play') checkPeriodEnd(s);
   s.tick++;
 }
 
@@ -248,6 +282,19 @@ function checkTouchlines(s: MatchState): void {
   });
 }
 
+/** Free kick to the defenders where the offside player played the ball. */
+function callOffside(s: MatchState, offender: Footballer): void {
+  s.possessor = -1;
+  s.passTarget = -1;
+  emit(s, 'offside', { team: offender.team, playerId: offender.id });
+  callOut(s, {
+    type: 'free-kick',
+    team: other(offender.team),
+    x: clamp(offender.x, 1, PITCH_LENGTH - 1),
+    y: clamp(offender.y, 1, PITCH_WIDTH - 1),
+  });
+}
+
 function callOut(s: MatchState, restart: NonNullable<MatchState['restart']>): void {
   s.phase = 'out';
   s.phaseTimer = OUT_PAUSE;
@@ -269,6 +316,7 @@ function restartPlay(s: MatchState): void {
       k.vx = k.vy = 0;
       k.gk!.state = 'holding';
       k.gk!.stateTimer = KEEPER_HOLD_TIME;
+      k.gk!.goalKick = true;
       s.lastTouch = team;
       s.lastToucherId = k.id;
       return;
@@ -323,7 +371,8 @@ function setPieceFor(s: MatchState, type: SetPieceType, team: Team, x: number, y
   if (type === 'penalty') {
     const defending = other(team);
     const dir = attackDir(team);
-    taker.x = x - dir * 1.5;
+    // The human's taker stands right behind the ball, ready to shoot; the CPU's walks up.
+    taker.x = x - dir * (team === 'home' && !s.settings.autoplay ? 0.6 : 1.5);
     taker.y = y;
     taker.facingX = dir;
     taker.facingY = 0;
@@ -355,20 +404,62 @@ function setPieceFor(s: MatchState, type: SetPieceType, team: Team, x: number, y
   if (type === 'free-kick' || type === 'penalty') emit(s, type, { team });
 }
 
+/** Real seconds into the match at which the current period ends: halves of `duration`, extra time a third more. */
+export function periodEnd(s: MatchState): number {
+  const d = s.settings.duration;
+  return [d / 2, d, d + d / 6, d + d / 3][s.period - 1];
+}
+
+/** The minute on the clock: 90 at full time, 120 after extra time. */
+export function matchMinute(s: MatchState): number {
+  const d = s.settings.duration;
+  const m = s.clock <= d ? (s.clock / d) * 90 : 90 + ((s.clock - d) / (d / 3)) * 30;
+  return Math.min([45, 90, 105, 120][s.period - 1], Math.floor(m));
+}
+
 function timeIsUp(s: MatchState): boolean {
-  return s.settings.mode === 'match' && s.clock >= s.settings.duration;
+  return s.settings.mode === 'match' && s.clock >= periodEnd(s);
 }
 
 /** Ends at the whistle unless an attack is live near goal; that gets a few seconds of added time. */
-function checkFullTime(s: MatchState): void {
+function checkPeriodEnd(s: MatchState): void {
   if (!timeIsUp(s)) return;
   const b = s.ball;
   const carrier = byId(s, s.possessor);
   const attackingTeam = carrier?.team ?? s.lastTouch;
   const nearGoal = Math.abs(b.x - targetGoalX(attackingTeam)) < 25;
   const attack = nearGoal && (!!carrier || Math.hypot(b.vx, b.vy) > 5 || !!s.setPiece);
-  if (attack && s.clock < s.settings.duration + MAX_ADDED_TIME) return;
-  endMatch(s);
+  if (attack && s.clock < periodEnd(s) + MAX_ADDED_TIME) return;
+  endPeriod(s);
+}
+
+/** Half-time; at full time a draw may go to extra time or penalties. */
+function endPeriod(s: MatchState): void {
+  const drawn = s.score.home === s.score.away;
+  const rule = s.settings.ifDrawn ?? 'final';
+  if (s.period === 1 || s.period === 3) startBreak(s, 'half-time');
+  else if (s.period === 2 && drawn && rule === 'extra-time') startBreak(s, 'extra-time');
+  else if (drawn && (s.period === 4 || rule === 'penalties')) startShootout(s);
+  else endMatch(s);
+}
+
+function startBreak(s: MatchState, kind: 'half-time' | 'extra-time'): void {
+  s.phase = 'break';
+  s.phaseTimer = BREAK_PAUSE;
+  s.possessor = -1;
+  s.setPiece = null;
+  s.restart = null;
+  s.foul = null;
+  s.offside = null;
+  emit(s, kind);
+}
+
+/** The next half kicks off from where the clock says it should; the sides take turns. */
+function startPeriod(s: MatchState): void {
+  rest(s);
+  s.clock = periodEnd(s);
+  s.period++;
+  kickoff(s, s.period % 2 === 0 ? other(s.firstKickoff) : s.firstKickoff);
 }
 
 function endMatch(s: MatchState): void {

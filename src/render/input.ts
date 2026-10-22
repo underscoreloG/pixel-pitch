@@ -1,12 +1,13 @@
 import Phaser from 'phaser';
 import type { InputFrame } from '../sim/types';
+import { touch } from '../ui/touch';
 
 const DEADZONE = 0.18;
 
 // Standard gamepad mapping (Xbox layout): A=0, B=1, X=2, Y=3, LB=4, RB=5, RT=7.
 const PAD = { pass: 0, shoot: 1, lob: 2, through: 3, switch: 4, finesse: 5, sprint: 7 } as const;
 
-/** Merges keyboard and first gamepad into one InputFrame for the sim. */
+/** Merges keyboard, first gamepad and on-screen touch controls into one InputFrame for the sim. */
 export class InputReader {
   private keys: Record<string, Phaser.Input.Keyboard.Key>;
   private requireRelease = false;
@@ -63,6 +64,17 @@ export class InputReader {
       frame.finesse ||= pressed(PAD.finesse);
       frame.switch ||= pressed(PAD.switch);
     }
+    if (Math.hypot(touch.moveX, touch.moveY) > DEADZONE) {
+      frame.moveX = touch.moveX;
+      frame.moveY = touch.moveY;
+    }
+    frame.sprint ||= touch.sprint;
+    frame.pass ||= touch.pass;
+    frame.shoot ||= touch.shoot;
+    frame.lob ||= touch.lob;
+    frame.through ||= touch.through;
+    frame.finesse ||= touch.finesse;
+    frame.switch ||= touch.switch;
     if (this.requireRelease) {
       if (frame.pass || frame.shoot || frame.lob || frame.through) frame.pass = frame.shoot = frame.lob = frame.through = false;
       else this.requireRelease = false;
