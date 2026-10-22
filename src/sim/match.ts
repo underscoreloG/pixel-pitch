@@ -102,7 +102,7 @@ export function kickoff(s: MatchState, team: Team): void {
         : kickoffSpot(p, team);
     Object.assign(p, { x: spot.x, y: spot.y, vx: 0, vy: 0, facingX: attackDir(p.team), facingY: 0 });
     Object.assign(p, { charging: null, charge: 0, pending: null, slide: 0, down: 0, kickCooldown: 0, think: 0 });
-    if (p.gk) Object.assign(p.gk, { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0 });
+    if (p.gk) Object.assign(p.gk, { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0, facingPenalty: false });
   }
   s.possessor = -1;
   s.passTarget = -1;
@@ -326,6 +326,7 @@ function setPieceFor(s: MatchState, type: SetPieceType, team: Team, x: number, y
       if (p.gk && p.team === defending) {
         p.x = ownGoalX(defending) + attackDir(defending) * 0.3;
         p.y = CENTER.y;
+        p.gk.facingPenalty = true;
         continue;
       }
       if (inPenaltyArea(defending, p.x, p.y) || dist(p, s.ball) < FREE_KICK_DISTANCE) {

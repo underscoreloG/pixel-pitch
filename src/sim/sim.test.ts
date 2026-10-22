@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { predictCrossing, stepBall } from './ball';
 import { CENTER, DT, FOUL_PAUSE, GOAL_HEIGHT, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
 import { NO_INPUT, createMatch, kickoff, stepMatch } from './match';
+import { commitFoul } from './tackle';
 import type { Ball, Footballer, InputFrame, MatchSettings, MatchState } from './types';
 
 const MATCH: MatchSettings = { mode: 'match', duration: 600, difficulty: 1 };
@@ -374,6 +375,52 @@ describe('taking set pieces', () => {
       expect(types(s)).toContain('kick');
     });
   }
+});
+
+describe('penalties', () => {
+  /** Fouls the attacking side's #9 in the box, waits for the penalty, takes it (human) or lets the CPU, returns the outcome. */
+  function penalty(seed: number, team: 'home' | 'away', stick = { moveX: 1, moveY: 0.22 }, charge = 0.7): string {
+    const s = createMatch(seed, MATCH);
+    s.setPiece = null;
+    const att = s.players.find((p) => p.team === team && p.number === 9)!;
+    const def = s.players.find((p) => p.team !== team && p.role === 'DF')!;
+    const boxX = team === 'home' ? 95 : 10;
+    Object.assign(att, { x: boxX, y: CENTER.y });
+    Object.assign(def, { x: boxX + 0.5, y: CENTER.y });
+    s.possessor = att.id;
+    commitFoul(s, def, att, 0.3);
+    run(s, FOUL_PAUSE + 0.1);
+    expect((s as MatchState).setPiece?.type).toBe('penalty');
+    if (team === 'home') {
+      run(s, 0.4, { ...NO_INPUT, moveX: 1 });
+      press(s, 'shoot', charge, stick);
+    }
+    for (let i = 0; i < 4 / DT; i++) {
+      stepMatch(s, NO_INPUT);
+      for (const e of s.events) {
+        if (e.type === 'goal') return 'goal';
+        if (e.type === 'save' || e.type === 'catch') return 'saved';
+        if (e.type === 'post' || e.type === 'bar' || e.type === 'goal-kick' || e.type === 'corner') return 'missed';
+      }
+      s.events.length = 0;
+    }
+    return 'none';
+  }
+  const rate = (outcomes: string[]) => outcomes.filter((o) => o === 'goal').length / outcomes.length;
+  const seeds = Array.from({ length: 40 }, (_, i) => i + 1);
+
+  it('a well-placed red penalty usually goes in, but the keeper saves some', () => {
+    const outs = seeds.map((seed) => penalty(seed, 'home'));
+    const r = rate(outs);
+    expect(r).toBeGreaterThan(0.6);
+    expect(r).toBeLessThan(0.95);
+  });
+
+  it('CPU penalties are scored at a similar rate', () => {
+    const r = rate(seeds.map((seed) => penalty(seed, 'away')));
+    expect(r).toBeGreaterThan(0.55);
+    expect(r).toBeLessThan(0.95);
+  });
 });
 
 describe('tackles, fouls and cards', () => {

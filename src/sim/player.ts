@@ -69,7 +69,7 @@ export function createFootballer(
     down: 0,
     yellow: 0,
     sentOff: false,
-    gk: role === 'GK' ? { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0, diveDir: 0 } : null,
+    gk: role === 'GK' ? { state: 'positioning', stateTimer: 0, threatTimer: 0, ignoreBall: 0, diveDir: 0, facingPenalty: false } : null,
     think: 0,
   };
 }

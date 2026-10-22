@@ -51,6 +51,8 @@ export interface KeeperBrain {
   threatTimer: number;
   ignoreBall: number;
   diveDir: number;
+  /** Waiting for a penalty to be struck: he will pick a side as it is. */
+  facingPenalty: boolean;
 }
 
 export interface Footballer {

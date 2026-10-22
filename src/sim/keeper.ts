@@ -17,6 +17,7 @@ import {
   KEEPER_RECOVER_TIME,
   KEEPER_SPEED,
   KEEPER_SURE_CATCH_SPEED,
+  PENALTY_READ,
 } from './constants';
 import { emit } from './events';
 import { kickBall, lobPowerFor, passPowerFor } from './kick';
@@ -61,7 +62,7 @@ export function stepKeeper(s: MatchState, k: Footballer, dt: number): void {
       break;
 
     case 'positioning':
-      if (biteOnFake(s, k)) break;
+      if (penaltyGuess(s, k) || biteOnFake(s, k)) break;
       if (!react(s, k, dt)) moveTo(k, positionTarget(s, k), dt, shooterWindingUp(s, k) ? 1.5 : KEEPER_SPEED);
       break;
   }
@@ -69,6 +70,28 @@ export function stepKeeper(s: MatchState, k: Footballer, dt: number): void {
   k.x += k.vx * dt;
   k.y += k.vy * dt;
   if (gk.state !== 'down') tryClaimBall(s, k);
+}
+
+/**
+ * From 11 m there is no time to react: as the penalty is struck the keeper
+ * commits to a side. He reads it right with PENALTY_READ odds, otherwise he
+ * goes the wrong way or (sometimes) stays put and reacts as normal.
+ */
+function penaltyGuess(s: MatchState, k: Footballer): boolean {
+  const gk = k.gk!;
+  if (!gk.facingPenalty || s.setPiece) return false;
+  gk.facingPenalty = false;
+  const crossing = predictCrossing(s.ball, k.x, 2);
+  if (!crossing) return false;
+  const side = Math.sign(crossing.y - CENTER.y) || (random(s.rng) < 0.5 ? 1 : -1);
+  const read = random(s.rng) < PENALTY_READ[s.settings.difficulty];
+  if (!read && random(s.rng) < 0.08) return false;
+  gk.state = 'diving';
+  gk.stateTimer = KEEPER_DIVE_TIME;
+  gk.diveDir = read ? side : -side;
+  k.vx = 0;
+  k.vy = gk.diveDir * KEEPER_LEVELS[s.settings.difficulty].diveSpeed;
+  return true;
 }
 
 /** An opponent fakes a shot close in: the keeper may commit early and go down the wrong way. */

@@ -255,16 +255,16 @@ function carry(s: MatchState, p: Footballer): Target {
   return { x: p.x + (dx / n) * 5, y: ty, sprint: space };
 }
 
-function shoot(s: MatchState, p: Footballer, goal: Vec2, toGoal: number): void {
+function shoot(s: MatchState, p: Footballer, goal: Vec2, toGoal: number, penalty = false): void {
   const level = AI_LEVELS[s.settings.difficulty];
   const keeper = keeperOf(s, other(p.team));
-  // Far post from the keeper, a little inside it.
-  const side = keeper && keeper.y > CENTER.y ? -1 : 1;
-  const ty = goal.y + side * (GOAL_WIDTH / 2 - 0.7);
+  // Far post from the keeper, a little inside it. Penalties: a random side, a bit of variety.
+  const side = penalty ? (random(s.rng) < 0.5 ? 1 : -1) : keeper && keeper.y > CENTER.y ? -1 : 1;
+  const ty = goal.y + side * (GOAL_WIDTH / 2 - 0.7 - (penalty ? random(s.rng) * 0.8 : 0));
   const dx = goal.x - p.x;
   const dy = ty - p.y;
   const n = Math.hypot(dx, dy) || 1;
-  const power = clamp(0.5 + toGoal * 0.012, 0.5, 0.82);
+  const power = penalty ? 0.62 + random(s.rng) * 0.18 : clamp(0.5 + toGoal * 0.012, 0.5, 0.82);
   kickBall(s, p, 'shot', power, dx / n, dy / n, { errorMul: level.accuracy });
 }
 
@@ -316,7 +316,7 @@ function takeSetPiece(s: MatchState, p: Footballer): Target {
   const goal = { x: targetGoalX(p.team), y: CENTER.y };
   const toGoal = dist(sp, goal);
   if (sp.type === 'penalty' || (sp.type === 'free-kick' && toGoal < 26)) {
-    shoot(s, p, goal, toGoal);
+    shoot(s, p, goal, toGoal, sp.type === 'penalty');
     return spot;
   }
   if (sp.type === 'corner') {

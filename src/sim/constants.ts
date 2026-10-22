@@ -64,6 +64,8 @@ export const KEEPER_MAX_DIVING_Z = 1.8;
 export const KEEPER_SURE_CATCH_SPEED = 10;
 export const KEEPER_MAX_CATCH_SPEED = 20;
 export const KEEPER_HOLD_TIME = 1.2;
+/** Chance a keeper facing a penalty dives the right way, per difficulty (the rest he guesses wrong or stays). */
+export const PENALTY_READ = [0.15, 0.22, 0.3] as const;
 /** Reaction (s), dive speed (m/s) and catch multiplier per difficulty: easy, normal, hard. */
 export const KEEPER_LEVELS = [
   { reaction: 0.28, diveSpeed: 5.6, catchFactor: 0.8 },
