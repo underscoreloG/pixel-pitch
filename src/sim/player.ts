@@ -383,6 +383,7 @@ export function stepHuman(s: MatchState, input: InputFrame, dt: number): void {
         sprinting: sprint,
         errorMul: k.errorMul,
         target: k.target,
+        lift: k.lift,
       });
       // Control follows the pass, FIFA style; the stick used to aim it doesn't steer the receiver.
       if (k.target >= 0) {

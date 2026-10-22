@@ -27,6 +27,8 @@ import type { Footballer, MatchState } from './types';
 
 /** Chance a keeper bites on a fake shot, per difficulty. */
 const BITE_CHANCE = [0.75, 0.55, 0.35];
+/** Chance a hard shot right at the edge of a diving keeper's reach gets past him, per difficulty. */
+const FINGERTIP_MISS = [0.95, 0.8, 0.6];
 
 export function stepKeeper(s: MatchState, k: Footballer, dt: number): void {
   const gk = k.gk!;
@@ -140,7 +142,8 @@ function react(s: MatchState, k: Footballer, dt: number): boolean {
   const lateral = crossing.y - k.y;
   const t = Math.max(crossing.t, 0.05);
   const onFoot = KEEPER_REACH_STANDING + KEEPER_SPEED * t * 0.7;
-  if (Math.abs(lateral) <= onFoot) {
+  // On his feet if he can get there, or while it's still far off: diving now would leave him on the ground as it arrives.
+  if (Math.abs(lateral) <= onFoot || t > KEEPER_DIVE_TIME) {
     moveTo(k, { x: k.x, y: crossing.y }, dt, KEEPER_SPEED);
     return true;
   }
@@ -148,7 +151,9 @@ function react(s: MatchState, k: Footballer, dt: number): boolean {
   gk.stateTimer = KEEPER_DIVE_TIME;
   gk.diveDir = Math.sign(lateral);
   k.vx = 0;
-  k.vy = gk.diveDir * Math.min(level.diveSpeed, Math.abs(lateral) / t);
+  // Some dives are better than others: a corner he can only just reach is a coin toss, not a sure save.
+  const spring = level.diveSpeed * (0.7 + 0.35 * random(s.rng));
+  k.vy = gk.diveDir * Math.min(spring, Math.abs(lateral) / t);
   return true;
 }
 
@@ -218,6 +223,14 @@ function tryClaimBall(s: MatchState, k: Footballer): void {
   if (dist(ball, k) > reach || ball.z > maxZ) return;
 
   const speed = Math.hypot(ball.vx, ball.vy, ball.vz);
+  // A firm shot at full stretch can beat the dive: fingertips aren't hands.
+  if (diving) {
+    const stretch = clamp((Math.abs(ball.y - k.y) - 0.3) / (reach - 0.3), 0, 1);
+    if (random(s.rng) < stretch * stretch * clamp((speed - 15) / 15, 0, 1) * FINGERTIP_MISS[s.settings.difficulty]) {
+      gk.ignoreBall = 0.3;
+      return;
+    }
+  }
   const t = clamp((speed - KEEPER_SURE_CATCH_SPEED) / (KEEPER_MAX_CATCH_SPEED - KEEPER_SURE_CATCH_SPEED), 0, 1);
   const catchChance = (1 - 0.85 * t) * (diving ? 0.8 : 1) * KEEPER_LEVELS[s.settings.difficulty].catchFactor;
   const wasShot = speed > 12;

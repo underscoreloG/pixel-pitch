@@ -431,7 +431,7 @@ export class MatchScene extends Phaser.Scene {
     const power = Math.max(MIN_KICK_POWER, p.charge);
     // Same resolution as the real kick, so the guide shows the assisted result.
     const aim = resolveHumanKick(s, p, type, power, input.moveX, input.moveY);
-    const plan = planKick(s, p, type, aim.power, aim.dirX, aim.dirY, isSprinting(p, input.sprint));
+    const plan = planKick(s, p, type, aim.power, aim.dirX, aim.dirY, isSprinting(p, input.sprint), aim.lift);
     const b: Ball = { x: startX, y: startY, z: plan.z, vx: plan.vx, vy: plan.vy, vz: plan.vz };
     const color = POWER_COLORS[type];
     let crossedGoalLine = false;

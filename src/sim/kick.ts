@@ -1,4 +1,4 @@
-import { stepBall } from './ball';
+import { predictCrossing, stepBall } from './ball';
 import {
   CENTER,
   DT,
@@ -12,7 +12,7 @@ import {
 } from './constants';
 import { emit } from './events';
 import { random } from './rng';
-import { active, clamp, dist, keeperOf, other, targetGoalX } from './team';
+import { active, clamp, dist, keeperOf, other, segmentDistance, targetGoalX } from './team';
 import type { Ball, Footballer, KickType, MatchState, Vec2 } from './types';
 
 export interface KickPlan {
@@ -25,7 +25,18 @@ export interface KickPlan {
   errorDeg: number;
 }
 
-/** Deterministic launch for a kick, before random error. Shared by the sim and the aim guide. */
+/** Launch speed (m/s) of each kick at a given power. */
+const passSpeed = (power: number): number => 8 + 18 * power;
+const shotSpeed = (power: number): number => 22 + 13 * power;
+const lobSpeed = (power: number): number => 8 + 12 * power;
+
+/** Highest an assisted shot crosses the goal line (the bar is at 2.44 m). */
+const ASSISTED_SHOT_MAX_Z = 2;
+
+/**
+ * Deterministic launch for a kick, before random error. Shared by the sim and the aim guide.
+ * `lift` overrides the upward speed (assisted shots kept under the bar).
+ */
 export function planKick(
   s: MatchState,
   p: Footballer,
@@ -34,6 +45,7 @@ export function planKick(
   dirX: number,
   dirY: number,
   sprinting: boolean,
+  lift?: number,
 ): KickPlan {
   const ball = s.ball;
   let speed: number;
@@ -41,18 +53,18 @@ export function planKick(
   let errorDeg: number;
   switch (type) {
     case 'pass':
-      speed = 7 + 15 * power;
+      speed = passSpeed(power);
       vz = 0.4;
       errorDeg = 1.5 + (sprinting ? 2 : 0);
       break;
     case 'shot':
-      speed = 16 + 16 * power;
+      speed = shotSpeed(power);
       // A driven shot rises a little; only a maxed-out bar adds real lift.
       vz = 1.2 + 3 * power + Math.max(0, power - 0.95) * 30;
       errorDeg = 1.5 + Math.max(0, power - 0.85) * 12 + (sprinting ? 2 : 0);
       break;
     case 'lob':
-      speed = 8 + 12 * power;
+      speed = lobSpeed(power);
       vz = 5 + 7 * power;
       errorDeg = 3;
       break;
@@ -69,6 +81,7 @@ export function planKick(
     errorDeg += 4;
     vz += 1.5;
   }
+  if (lift !== undefined && s.setPiece?.type !== 'throw-in') vz = lift;
   return { vx: dirX * speed + p.vx * 0.25, vy: dirY * speed + p.vy * 0.25, vz, z, errorDeg };
 }
 
@@ -80,9 +93,9 @@ export function kickBall(
   power: number,
   dirX: number,
   dirY: number,
-  opts: { sprinting?: boolean; errorMul?: number; target?: number } = {},
+  opts: { sprinting?: boolean; errorMul?: number; target?: number; lift?: number } = {},
 ): void {
-  const plan = planKick(s, p, type, power, dirX, dirY, opts.sprinting ?? false);
+  const plan = planKick(s, p, type, power, dirX, dirY, opts.sprinting ?? false, opts.lift);
   const throwIn = s.setPiece?.type === 'throw-in';
   const err = ((random(s.rng) * 2 - 1) * plan.errorDeg * (opts.errorMul ?? 1) * Math.PI) / 180;
   const cos = Math.cos(err);
@@ -93,7 +106,8 @@ export function kickBall(
   ball.z = plan.z;
   ball.vx = plan.vx * cos - plan.vy * sin;
   ball.vy = plan.vx * sin + plan.vy * cos;
-  ball.vz = plan.vz + (type === 'shot' && !throwIn ? (random(s.rng) * 2 - 1) * 0.6 * power : 0);
+  const wobble = (random(s.rng) * 2 - 1) * 0.6 * power * Math.min(1, opts.errorMul ?? 1);
+  ball.vz = plan.vz + (type === 'shot' && !throwIn ? wobble : 0);
 
   const n = Math.hypot(ball.vx, ball.vy) || 1;
   p.facingX = ball.vx / n;
@@ -112,10 +126,11 @@ export function kickBall(
   emit(s, 'kick', { power, team: p.team, playerId: p.id });
 }
 
-/** Teammate closest to the aim direction, within the assist cone. */
+/** Teammate closest to the aim direction, within the assist cone, preferring an open lane. */
 export function findPassTarget(s: MatchState, p: Footballer, dirX: number, dirY: number): Footballer | undefined {
   let best: Footballer | undefined;
   let bestScore = Infinity;
+  const opps = active(s).filter((o) => o.team !== p.team);
   for (const t of active(s)) {
     if (t.team !== p.team || t.id === p.id) continue;
     const dx = t.x - p.x;
@@ -124,8 +139,10 @@ export function findPassTarget(s: MatchState, p: Footballer, dirX: number, dirY:
     if (d < 1.5 || d > 55) continue;
     const angle = Math.acos(Math.max(-1, Math.min(1, (dx * dirX + dy * dirY) / d)));
     if (angle > PASS_ASSIST_CONE) continue;
-    // Prefer on-line over near: angle dominates, distance breaks ties. The keeper is a last resort.
-    const score = angle * 30 + d * 0.15 + (t.gk ? 25 : 0);
+    // Prefer on-line over near: angle dominates, distance breaks ties. The keeper is a last resort,
+    // and a mate with an opponent sitting in the lane loses out to an open one nearby.
+    const lane = Math.min(...opps.map((o) => segmentDistance(o, p, t)));
+    const score = angle * 30 + d * 0.15 + (t.gk ? 25 : 0) + Math.max(0, 3 - lane) * 4;
     if (score < bestScore) {
       bestScore = score;
       best = t;
@@ -136,8 +153,8 @@ export function findPassTarget(s: MatchState, p: Footballer, dirX: number, dirY:
 
 /** Where to aim a pass so it meets a moving receiver. */
 export function leadPoint(p: Footballer, t: Footballer, ballSpeed: number): Vec2 {
-  // Lead the run, but not by more than ~0.8 s: runners change direction.
-  const flight = Math.min(0.8, dist(p, t) / Math.max(ballSpeed * 0.7, 1));
+  // Lead the run, but only a little: runners change direction, and the receiver comes to meet the ball anyway.
+  const flight = Math.min(0.4, dist(p, t) / Math.max(ballSpeed * 0.7, 1));
   return { x: t.x + t.vx * flight, y: t.y + t.vy * flight };
 }
 
@@ -163,20 +180,22 @@ export function aimFor(
   if (type === 'shot' || s.setPiece?.type === 'penalty') return { dirX: dx, dirY: dy, target: -1 };
   const t = findPassTarget(s, p, dx, dy);
   if (!t) return { dirX: dx, dirY: dy, target: -1 };
-  const lead = leadPoint(p, t, type === 'lob' ? 8 + 12 * power : 7 + 15 * power);
-  const lx = lead.x - p.x;
-  const ly = lead.y - p.y;
+  const lead = leadPoint(p, t, type === 'lob' ? lobSpeed(power) : passSpeed(power));
+  // From the ball, not the player: it sits up to a metre ahead of him.
+  const from = kickOrigin(s);
+  const lx = lead.x - from.x;
+  const ly = lead.y - from.y;
   const l = Math.hypot(lx, ly) || 1;
   return { dirX: lx / l, dirY: ly / l, target: t.id };
 }
 
 /** Ground-pass power that still has `arrival` m/s of pace when it gets `distance` away. */
-export function passPowerFor(distance: number, arrival = 8): number {
+export function passPowerFor(distance: number, arrival = 10): number {
   let lo = 0;
   let hi = 1;
   for (let i = 0; i < 12; i++) {
     const mid = (lo + hi) / 2;
-    if (speedAfter(7 + 15 * mid, distance) < arrival) lo = mid;
+    if (speedAfter(passSpeed(mid), distance) < arrival) lo = mid;
     else hi = mid;
   }
   return hi;
@@ -188,7 +207,7 @@ export function lobPowerFor(distance: number): number {
   let hi = 1;
   for (let i = 0; i < 10; i++) {
     const mid = (lo + hi) / 2;
-    if (lobCarry(8 + 12 * mid, 5 + 7 * mid) < distance) lo = mid;
+    if (lobCarry(lobSpeed(mid), 5 + 7 * mid) < distance) lo = mid;
     else hi = mid;
   }
   return hi;
@@ -221,6 +240,8 @@ export interface HumanKick {
   target: number;
   /** Scales the random aim error. */
   errorMul: number;
+  /** Upward speed override (assisted shots kept under the bar). */
+  lift?: number;
 }
 
 /** Where the ball is kicked from: the set-piece spot for a dead ball. */
@@ -231,8 +252,9 @@ function kickOrigin(s: MatchState): Vec2 {
 /**
  * Turns the human's stick and charge into a kick. Assisted (default): passes
  * go to the teammate in the stick direction with the right weight (charge only
- * nudges it), shots aimed near the goal are pulled inside the posts, and random
- * error is reduced. Manual: stick direction and charge, as they are.
+ * sets how firm), shots aimed near the goal are pulled inside the posts and kept
+ * under the bar, the kicker's own run is allowed for, and random error is small.
+ * Manual: stick direction and charge, as they are.
  */
 export function resolveHumanKick(
   s: MatchState,
@@ -246,29 +268,47 @@ export function resolveHumanKick(
   const dirX = m < 0.3 ? p.facingX : moveX / m;
   const dirY = m < 0.3 ? p.facingY : moveY / m;
   if (s.settings.assist === false) return { power: charge, dirX, dirY, target: -1, errorMul: 1 };
-  if (type === 'shot' || s.setPiece?.type === 'penalty') return assistShot(s, p, charge, dirX, dirY, m < 0.3);
+  const throwIn = s.setPiece?.type === 'throw-in';
+  if ((type === 'shot' && !throwIn) || s.setPiece?.type === 'penalty') {
+    return assistShot(s, p, charge, dirX, dirY, m < 0.3);
+  }
+  const speedOf = (power: number) => (throwIn ? 6 + 10 * power : type === 'lob' ? lobSpeed(power) : passSpeed(power));
 
   let aim = aimFor(s, p, type, moveX, moveY, charge);
-  if (aim.target < 0) return { power: charge, dirX: aim.dirX, dirY: aim.dirY, target: -1, errorMul: 0.8 };
+  if (aim.target < 0) {
+    const run = allowForRun(p, aim.dirX, aim.dirY, speedOf(charge));
+    return { power: charge, ...run, target: -1, errorMul: 0.6 };
+  }
   const mate = s.players[aim.target];
   const from = kickOrigin(s);
-  const throwIn = s.setPiece?.type === 'throw-in';
   let ideal = charge;
   // The lead point depends on ball speed and the speed on the distance: two rounds settle it.
   for (let i = 0; i < 2; i++) {
-    const speed = throwIn ? 6 + 10 * ideal : type === 'lob' ? 8 + 12 * ideal : 7 + 15 * ideal;
-    const d = dist(from, leadPoint(p, mate, speed));
-    // Ground passes: the charge sets how firmly it arrives, from 6 m/s (tap) to 14 m/s (full bar), still trappable.
-    ideal = throwIn ? throwPowerFor(d) : type === 'lob' ? lobPowerFor(d) : passPowerFor(d, 6 + 8 * charge);
+    const d = dist(from, leadPoint(p, mate, speedOf(ideal)));
+    // Ground passes: the charge sets how firmly it arrives, from 10 m/s (tap) to 18 m/s (full bar).
+    // The receiver is set for it and takes either.
+    ideal = throwIn ? throwPowerFor(d) : type === 'lob' ? lobPowerFor(d) : passPowerFor(d, 10 + 8 * charge);
     aim = aimFor(s, p, type, moveX, moveY, ideal);
   }
+  const power = type === 'pass' && !throwIn ? ideal : clamp(ideal * (0.92 + 0.16 * charge), 0.05, 1);
   return {
-    power: type === 'pass' && !throwIn ? ideal : clamp(ideal * (0.92 + 0.16 * charge), 0.05, 1),
-    dirX: aim.dirX,
-    dirY: aim.dirY,
+    power,
+    ...allowForRun(p, aim.dirX, aim.dirY, speedOf(power)),
     target: aim.target,
-    errorMul: 0.5,
+    errorMul: type === 'pass' && !throwIn ? 0.2 : 0.4,
   };
+}
+
+/**
+ * Foot direction that sends the ball exactly along `dir` once the kicker's own
+ * run is added (a quarter of his velocity carries into the ball).
+ */
+function allowForRun(p: Footballer, dirX: number, dirY: number, speed: number): { dirX: number; dirY: number } {
+  const wx = p.vx * 0.25;
+  const wy = p.vy * 0.25;
+  const along = dirX * wx + dirY * wy;
+  const k = along + Math.sqrt(Math.max(0, along * along - (wx * wx + wy * wy) + speed * speed));
+  return { dirX: (k * dirX - wx) / speed, dirY: (k * dirY - wy) / speed };
 }
 
 /** Shots roughly at goal are aimed at a point inside the posts; no stick means the far corner. */
@@ -278,23 +318,41 @@ function assistShot(s: MatchState, p: Footballer, charge: number, dx: number, dy
   const gx = goalX - from.x;
   const gy = CENTER.y - from.y;
   const dG = Math.hypot(gx, gy) || 1;
-  const towardGoal = (dx * gx + dy * gy) / dG > Math.cos(0.7);
-  if (dG > 38 || (!towardGoal && !neutral)) return { power: charge, dirX: dx, dirY: dy, target: -1, errorMul: 1 };
+  const towardGoal = (dx * gx + dy * gy) / dG > Math.cos(0.9);
+  if (dG > 40 || (!towardGoal && !neutral)) return { power: charge, dirX: dx, dirY: dy, target: -1, errorMul: 1 };
   let ty: number;
   if (neutral) {
     const keeper = keeperOf(s, other(p.team));
     const side = keeper && keeper.y > CENTER.y ? -1 : 1;
-    ty = CENTER.y + side * (GOAL_WIDTH / 2 - 0.7);
+    ty = CENTER.y + side * (GOAL_WIDTH / 2 - 0.6);
   } else {
     // Where the stick line meets the goal line, pulled inside the posts.
     const k = Math.abs(dx) > 0.05 ? gx / dx : -1;
     ty = k > 0 ? from.y + dy * k : CENTER.y;
   }
-  ty = clamp(ty, GOAL_Y_MIN + 0.6, GOAL_Y_MAX - 0.6);
+  ty = clamp(ty, GOAL_Y_MIN + 0.45, GOAL_Y_MAX - 0.45);
   const ax = goalX - from.x;
   const ay = ty - from.y;
   const n = Math.hypot(ax, ay) || 1;
-  return { power: charge, dirX: ax / n, dirY: ay / n, target: -1, errorMul: 0.5 };
+  const dir = allowForRun(p, ax / n, ay / n, shotSpeed(charge));
+  return { power: charge, ...dir, target: -1, errorMul: 0.25, lift: liftUnderBar(s, p, charge, dir, goalX) };
+}
+
+/** Upward speed that brings a shot in under the bar, or undefined if it already dips under. */
+function liftUnderBar(s: MatchState, p: Footballer, power: number, dir: { dirX: number; dirY: number }, goalX: number): number | undefined {
+  const plan = planKick(s, p, 'shot', power, dir.dirX, dir.dirY, false);
+  const from = kickOrigin(s);
+  const crossZ = (vz: number) =>
+    predictCrossing({ x: from.x, y: from.y, z: plan.z, vx: plan.vx, vy: plan.vy, vz }, goalX, 3)?.z ?? 0;
+  if (crossZ(plan.vz) <= ASSISTED_SHOT_MAX_Z) return undefined;
+  let lo = 0;
+  let hi = plan.vz;
+  for (let i = 0; i < 8; i++) {
+    const mid = (lo + hi) / 2;
+    if (crossZ(mid) > ASSISTED_SHOT_MAX_Z) hi = mid;
+    else lo = mid;
+  }
+  return lo;
 }
 
 /** Throw-in power that lands about 90% of the way (it bounces on to the receiver). */

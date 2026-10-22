@@ -61,6 +61,15 @@ export function dist(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/** Distance from a point to the segment a-b (how close a player is to a passing lane). */
+export function segmentDistance(pt: Vec2, a: Vec2, b: Vec2): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const l2 = abx * abx + aby * aby || 1;
+  const t = clamp(((pt.x - a.x) * abx + (pt.y - a.y) * aby) / l2, 0, 1);
+  return Math.hypot(pt.x - (a.x + abx * t), pt.y - (a.y + aby * t));
+}
+
 /** Where a player stands in the team shape right now: slides with the ball, pushes up in possession. */
 export function formationSpot(s: MatchState, p: Footballer): Vec2 {
   const ballU = teamU(p.team, s.ball.x);

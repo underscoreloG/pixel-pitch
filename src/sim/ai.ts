@@ -28,6 +28,7 @@ import {
   keeperOf,
   other,
   ownGoalX,
+  segmentDistance,
   targetGoalX,
   teamU,
   toPitch,
@@ -260,11 +261,11 @@ function shoot(s: MatchState, p: Footballer, goal: Vec2, toGoal: number, penalty
   const keeper = keeperOf(s, other(p.team));
   // Far post from the keeper, a little inside it. Penalties: a random side, a bit of variety.
   const side = penalty ? (random(s.rng) < 0.5 ? 1 : -1) : keeper && keeper.y > CENTER.y ? -1 : 1;
-  const ty = goal.y + side * (GOAL_WIDTH / 2 - 0.7 - (penalty ? random(s.rng) * 0.8 : 0));
+  const ty = goal.y + side * (GOAL_WIDTH / 2 - 0.6 - (penalty ? random(s.rng) * 0.8 : 0));
   const dx = goal.x - p.x;
   const dy = ty - p.y;
   const n = Math.hypot(dx, dy) || 1;
-  const power = penalty ? 0.62 + random(s.rng) * 0.18 : clamp(0.5 + toGoal * 0.012, 0.5, 0.82);
+  const power = penalty ? 0.62 + random(s.rng) * 0.18 : clamp(0.6 + toGoal * 0.014, 0.6, 0.92);
   kickBall(s, p, 'shot', power, dx / n, dy / n, { errorMul: level.accuracy });
 }
 
@@ -292,14 +293,6 @@ function bestPass(s: MatchState, p: Footballer, opps: Footballer[]): PassOption 
     if (!best || score > best.score) best = { mate, lead, score, laneBlocked };
   }
   return best;
-}
-
-function segmentDistance(pt: Vec2, a: Vec2, b: Vec2): number {
-  const abx = b.x - a.x;
-  const aby = b.y - a.y;
-  const l2 = abx * abx + aby * aby || 1;
-  const t = clamp(((pt.x - a.x) * abx + (pt.y - a.y) * aby) / l2, 0, 1);
-  return Math.hypot(pt.x - (a.x + abx * t), pt.y - (a.y + aby * t));
 }
 
 /** Walk up behind the dead ball, then play it once the delay is over. */

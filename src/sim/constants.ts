@@ -45,7 +45,7 @@ export const MAX_CONTROL_HEIGHT = 0.5;
 export const MAX_CONTROL_REL_SPEED = 11;
 export const KICK_RADIUS = 1.0;
 export const MAX_KICK_HEIGHT = 1.2;
-export const CHARGE_TIME = 1;
+export const CHARGE_TIME = 0.8;
 export const MIN_KICK_POWER = 0.1;
 export const KICK_BUFFER_TIME = 0.25;
 export const KICK_COOLDOWN = 0.25;
@@ -54,11 +54,11 @@ export const KICK_COOLDOWN = 0.25;
 export const KEEPER_SPEED = 5;
 export const KEEPER_ACCEL = 20;
 export const KEEPER_REACTION = 0.18;
-export const KEEPER_DIVE_SPEED = 6.5;
+export const KEEPER_DIVE_SPEED = 6;
 export const KEEPER_DIVE_TIME = 0.55;
 export const KEEPER_RECOVER_TIME = 0.8;
 export const KEEPER_REACH_STANDING = 0.55;
-export const KEEPER_REACH_DIVING = 0.9;
+export const KEEPER_REACH_DIVING = 0.8;
 export const KEEPER_MAX_STANDING_Z = 2.4;
 export const KEEPER_MAX_DIVING_Z = 1.8;
 export const KEEPER_SURE_CATCH_SPEED = 10;
@@ -68,9 +68,9 @@ export const KEEPER_HOLD_TIME = 1.2;
 export const PENALTY_READ = [0.15, 0.22, 0.3] as const;
 /** Reaction (s), dive speed (m/s) and catch multiplier per difficulty: easy, normal, hard. */
 export const KEEPER_LEVELS = [
-  { reaction: 0.28, diveSpeed: 5.6, catchFactor: 0.8 },
+  { reaction: 0.28, diveSpeed: 5.2, catchFactor: 0.8 },
   { reaction: KEEPER_REACTION, diveSpeed: KEEPER_DIVE_SPEED, catchFactor: 1 },
-  { reaction: 0.12, diveSpeed: 7.3, catchFactor: 1.1 },
+  { reaction: 0.12, diveSpeed: 6.8, catchFactor: 1.1 },
 ] as const;
 
 // Referee

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { predictCrossing, stepBall } from './ball';
-import { CENTER, DT, FOUL_PAUSE, GOAL_HEIGHT, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
+import { CENTER, DT, FOUL_PAUSE, GOAL_HEIGHT, MIN_KICK_POWER, PENALTY_SPOT, PITCH_LENGTH, PITCH_WIDTH } from './constants';
+import { findPassTarget, planKick, resolveHumanKick } from './kick';
 import { NO_INPUT, createMatch, kickoff, stepMatch } from './match';
 import { commitFoul } from './tackle';
 import type { Ball, Footballer, InputFrame, MatchSettings, MatchState } from './types';
@@ -352,7 +353,7 @@ describe('defending and assisted kicks', () => {
       s.possessor = me.id;
       const n = Math.hypot(105 - 87.6, 37.2 - 30);
       press(s, 'shoot', 1, { moveX: (105 - 87.6) / n, moveY: (37.2 - 30) / n });
-      expect(Math.hypot(s.ball.vx, s.ball.vy)).toBeGreaterThan(28);
+      expect(Math.hypot(s.ball.vx, s.ball.vy)).toBeGreaterThan(32);
       for (let i = 0; i < 2 / DT; i++) {
         const prevX = s.ball.x;
         stepMatch(s, NO_INPUT);
@@ -389,6 +390,103 @@ describe('defending and assisted kicks', () => {
     };
     expect(Math.abs(shootFrom(true) - 34)).toBeLessThan(3.66);
     expect(Math.abs(shootFrom(false) - 34)).toBeGreaterThan(3.66);
+  });
+
+  it('an assisted full-power volley stays under the bar; a manual one flies over', () => {
+    const crossingZ = (assist: boolean, seed: number) => {
+      const s = createMatch(seed, { ...MATCH, assist });
+      const me = human(s);
+      only(s, me);
+      Object.assign(me, { x: 89, y: 34, facingX: 1, facingY: 0 });
+      // A bouncing ball met at knee height, fully charged.
+      Object.assign(s.ball, ball({ x: 89.6, y: 34, z: 0.7 }));
+      me.pending = { type: 'shot', power: 1, ttl: 0.25 };
+      stepMatch(s, { ...NO_INPUT, moveX: 1, moveY: 0.1 });
+      return predictCrossing(s.ball, PITCH_LENGTH, 3)?.z ?? NaN;
+    };
+    for (let seed = 1; seed <= 10; seed++) expect(crossingZ(true, seed)).toBeLessThan(GOAL_HEIGHT - 0.2);
+    expect(Math.max(...[1, 2, 3, 4, 5].map((seed) => crossingZ(false, seed)))).toBeGreaterThan(GOAL_HEIGHT);
+  });
+
+  it('a pass on the run allows for the runner\'s momentum, and even a tap arrives with pace', () => {
+    const s = createMatch(4, MATCH);
+    const me = human(s);
+    const mate = s.players.find((p) => p.team === 'home' && p.number === 4)!;
+    only(s, me, mate);
+    // Sprinting up the line, a tapped pass square to a teammate 20 m away.
+    Object.assign(me, { x: 50, y: 20, vx: 0, vy: 9, facingX: 0, facingY: 1 });
+    Object.assign(mate, { x: 30, y: 20, vx: 0, vy: 0 });
+    Object.assign(s.ball, ball({ x: 50, y: 20.9 }));
+    const k = resolveHumanKick(s, me, 'pass', MIN_KICK_POWER, -1, 0);
+    expect(k.target).toBe(mate.id);
+    const plan = planKick(s, me, 'pass', k.power, k.dirX, k.dirY, true);
+    const tx = mate.x - s.ball.x;
+    const ty = mate.y - s.ball.y;
+    const cos = (plan.vx * tx + plan.vy * ty) / (Math.hypot(plan.vx, plan.vy) * Math.hypot(tx, ty));
+    expect(cos).toBeGreaterThan(Math.cos((1 * Math.PI) / 180));
+    const b = { ...s.ball, vx: plan.vx, vy: plan.vy, vz: plan.vz };
+    for (let i = 0; i < 300 && Math.hypot(b.x - mate.x, b.y - mate.y) > 1; i++) stepBall(b, DT);
+    expect(Math.hypot(b.vx, b.vy)).toBeGreaterThan(9);
+  });
+
+  it('pass assist picks the open teammate over one with a defender in the lane', () => {
+    const s = createMatch(5, MATCH);
+    const me = human(s);
+    const near = s.players.find((p) => p.team === 'home' && p.number === 4)!;
+    const open = s.players.find((p) => p.team === 'home' && p.number === 7)!;
+    const blue = s.players.find((p) => p.team === 'away' && !p.gk)!;
+    only(s, me, near, open, blue);
+    Object.assign(me, { x: 50, y: 34, facingX: -1, facingY: 0 });
+    Object.assign(s.ball, ball({ x: 49.4, y: 34 }));
+    // The stick points nearer the first teammate, but a defender sits on that line.
+    Object.assign(near, { x: 35, y: 32 });
+    Object.assign(open, { x: 35, y: 38 });
+    Object.assign(blue, { x: 42, y: 33 });
+    expect(findPassTarget(s, me, -1, 0)?.id).toBe(open.id);
+    Object.assign(blue, { x: 42, y: 45 });
+    expect(findPassTarget(s, me, -1, 0)?.id).toBe(near.id);
+  });
+});
+
+describe('keeper against shots', () => {
+  /** A placed shot at the far corner from `d` metres with the keeper set, charged for `hold` seconds. */
+  function placedShot(seed: number, d: number, hold: number): boolean {
+    const s = createMatch(seed, MATCH);
+    const me = human(s);
+    only(s, me, keeper(s, 'away'));
+    const y = 34 + ((seed % 5) - 2) * 3;
+    const place = () => {
+      Object.assign(me, { x: 105 - d - 0.6, y, vx: 0, vy: 0, facingX: 1, facingY: 0 });
+      Object.assign(s.ball, ball({ x: 105 - d, y }));
+      s.possessor = me.id;
+    };
+    place();
+    run(s, 0.5);
+    place();
+    const ty = 34 + (y > 34 ? -3.2 : 3.2);
+    const n = Math.hypot(d, ty - y);
+    press(s, 'shoot', hold, { moveX: d / n, moveY: (ty - y) / n });
+    for (let i = 0; i < 3 / DT; i++) {
+      stepMatch(s, NO_INPUT);
+      if (s.phase === 'goal') return true;
+      if (s.phase !== 'play') return false;
+    }
+    return false;
+  }
+  const goals = (d: number, hold: number) => Array.from({ length: 20 }, (_, i) => placedShot(i + 1, d, hold)).filter(Boolean).length;
+
+  it('a half-power shot from range is saved: the keeper waits for it instead of diving early and lying down', () => {
+    expect(goals(24, 0.4)).toBeLessThanOrEqual(2);
+  });
+
+  it('a hard shot into the corner from the edge of the box beats the keeper sometimes, not always', () => {
+    const g = goals(22, 0.8);
+    expect(g).toBeGreaterThanOrEqual(3);
+    expect(g).toBeLessThanOrEqual(17);
+  });
+
+  it('a firm, placed shot from close in usually scores', () => {
+    expect(goals(12, 0.4)).toBeGreaterThanOrEqual(14);
   });
 });
 

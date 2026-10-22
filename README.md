@@ -50,8 +50,8 @@ Every push to `main` runs the tests, builds and deploys to GitHub Pages (`.githu
 | Pause | Esc | |
 
 Hold a kick button to charge, release to kick. Press another kick button while charging to fake.
-Passes and lobs snap to the teammate in the stick direction with the right weight; control follows the pass.
-Shots aimed near the goal are pulled inside the posts (Options > KICKS: MANUAL turns the assistance off).
+Passes and lobs snap to the teammate in the stick direction (preferring one with an open lane) with the right weight; control follows the pass.
+Shots aimed near the goal are pulled inside the posts and kept under the bar, and kicks on the run allow for your momentum (Options > KICKS: MANUAL turns the assistance off).
 Defending: hold S to run at the ball carrier and tackle when in range; getting your body on the ball can win it too.
 
 ## How it's built
